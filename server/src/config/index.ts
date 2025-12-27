@@ -52,6 +52,7 @@ export const config = {
     wosApiKey: process.env.WOS_API_KEY || '',
     wosBaseUrl: process.env.WOS_BASE_URL || 'https://api.clarivate.com/api/woslite',
     scopusApiKey: process.env.SCOPUS_API_KEY || '',
+    scopusInsttoken: process.env.SCOPUS_INSTTOKEN || '',
     scopusBaseUrl: process.env.SCOPUS_BASE_URL || 'https://api.elsevier.com/content/search/scopus',
     googleCseApiKey: process.env.GOOGLE_CSE_API_KEY || '',
     googleCseCx: process.env.GOOGLE_CSE_CX || '',

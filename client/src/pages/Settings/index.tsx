@@ -17,10 +17,14 @@ import {
   ExternalLink,
   Loader2,
   AlertCircle,
-  Save
+  Save,
+  Plus,
+  Trash2,
+  Eye,
+  EyeOff
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { settingsApi, type ModelSettings as ModelSettingsType, type DatasourceSettings as DatasourceSettingsType } from "@/services/api"
+import { settingsApi } from "@/services/api"
 
 type Theme = "light" | "dark" | "system"
 type Language = "zh-CN" | "en"
@@ -104,6 +108,52 @@ function SettingCard({ children, className }: { children: React.ReactNode; class
   return (
     <div className={cn("rounded-2xl bg-[hsl(var(--card))] border border-[hsl(var(--border))] p-5", className)}>
       {children}
+    </div>
+  )
+}
+
+function SecretInput({ 
+  value, 
+  onChange, 
+  placeholder,
+  masked
+}: { 
+  value: string
+  onChange: (v: string) => void
+  placeholder?: string
+  masked?: string
+}) {
+  const [show, setShow] = useState(false)
+  const [editing, setEditing] = useState(false)
+
+  const displayValue = editing ? value : (masked || value)
+  const isSecret = !editing && masked && !value
+
+  return (
+    <div className="relative">
+      <input
+        type={show ? "text" : "password"}
+        value={displayValue}
+        onChange={(e) => {
+          setEditing(true)
+          onChange(e.target.value)
+        }}
+        onFocus={() => setEditing(true)}
+        placeholder={placeholder}
+        className={cn(
+          "w-full h-11 px-4 pr-10 rounded-xl bg-[hsl(var(--secondary))] text-sm border-0",
+          "focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]",
+          "placeholder:text-[hsl(var(--muted-foreground))]",
+          isSecret && "text-[hsl(var(--muted-foreground))]"
+        )}
+      />
+      <button
+        type="button"
+        onClick={() => setShow(!show)}
+        className="absolute right-3 top-1/2 -translate-y-1/2 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+      >
+        {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+      </button>
     </div>
   )
 }
@@ -211,205 +261,237 @@ function GeneralSettings() {
   )
 }
 
+interface ModelEndpoint {
+  id: string
+  name: string
+  protocol: 'openai' | 'anthropic' | 'google'
+  base_url: string
+  api_key: string
+  api_key_masked?: string
+  default_model: string
+  is_preset: boolean
+  enabled: boolean
+}
+
+interface ModelSettingsData {
+  default_endpoint_id: string
+  endpoints: ModelEndpoint[]
+}
+
 function ModelSettings() {
-  const [settings, setSettings] = useState<ModelSettingsType>({
-    provider: "openai",
-    model: "gpt-4",
-    api_key: "",
-    base_url: "",
-    temperature: 0.7,
-    max_tokens: 4096
-  })
+  const [settings, setSettings] = useState<ModelSettingsData | null>(null)
+  const [editingEndpoint, setEditingEndpoint] = useState<string | null>(null)
+  const [newApiKey, setNewApiKey] = useState<Record<string, string>>({})
+  const [newModel, setNewModel] = useState<Record<string, string>>({})
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
-  const [isTesting, setIsTesting] = useState(false)
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   useEffect(() => {
-    const load = async () => {
-      const res = await settingsApi.getModel()
-      if (res.success && res.data) {
-        setSettings(res.data)
-      }
-      setIsLoading(false)
-    }
-    load()
+    loadSettings()
   }, [])
 
-  const handleSave = async () => {
-    setIsSaving(true)
-    const res = await settingsApi.updateModel(settings)
-    setIsSaving(false)
-    if (res.success) {
-      setTestResult({ success: true, message: "配置已保存" })
-    } else {
-      setTestResult({ success: false, message: res.error || "保存失败" })
-    }
-    setTimeout(() => setTestResult(null), 3000)
-  }
-
-  const handleTest = async () => {
-    setIsTesting(true)
-    setTestResult(null)
-    const res = await settingsApi.testLLM(settings)
-    setIsTesting(false)
+  const loadSettings = async () => {
+    const res = await settingsApi.getModel()
     if (res.success && res.data) {
-      setTestResult({ success: res.data.success, message: res.data.message })
-    } else {
-      setTestResult({ success: false, message: res.error || "测试失败" })
+      setSettings(res.data as ModelSettingsData)
     }
+    setIsLoading(false)
   }
 
-  if (isLoading) {
+  const handleSaveEndpoint = async (endpoint: ModelEndpoint) => {
+    setIsSaving(true)
+    const apiKey = newApiKey[endpoint.id]
+    const model = newModel[endpoint.id]
+    
+    const res = await settingsApi.updateModel({
+      endpoint: {
+        id: endpoint.id,
+        ...(apiKey ? { api_key: apiKey } : {}),
+        ...(model ? { default_model: model } : {}),
+        enabled: endpoint.enabled,
+      }
+    })
+    
+    if (res.success) {
+      setMessage({ type: 'success', text: `${endpoint.name} 配置已保存` })
+      setNewApiKey(prev => ({ ...prev, [endpoint.id]: '' }))
+      setEditingEndpoint(null)
+      await loadSettings()
+    } else {
+      setMessage({ type: 'error', text: res.error || '保存失败' })
+    }
+    setIsSaving(false)
+    setTimeout(() => setMessage(null), 3000)
+  }
+
+  const handleSetDefault = async (endpointId: string) => {
+    const res = await settingsApi.updateModel({ default_endpoint_id: endpointId })
+    if (res.success) {
+      setSettings(prev => prev ? { ...prev, default_endpoint_id: endpointId } : null)
+      setMessage({ type: 'success', text: '默认端点已更新' })
+    }
+    setTimeout(() => setMessage(null), 3000)
+  }
+
+  if (isLoading || !settings) {
     return <div className="flex justify-center py-20"><Loader2 className="h-6 w-6 animate-spin" /></div>
   }
 
-  const providers = [
-    { id: "openai", name: "OpenAI", models: ["gpt-4", "gpt-4-turbo", "gpt-3.5-turbo"] },
-    { id: "anthropic", name: "Anthropic", models: ["claude-3-opus", "claude-3-sonnet", "claude-3-haiku"] },
-    { id: "google", name: "Google", models: ["gemini-pro", "gemini-pro-vision"] },
-    { id: "custom", name: "自定义", models: [] },
-  ]
-
-  const currentProvider = providers.find(p => p.id === settings.provider)
+  const presetEndpoints = settings.endpoints.filter(e => e.is_preset)
 
   return (
     <div>
-      <SectionHeader icon={Server} title="模型配置" description="配置 AI 模型和 API 密钥" />
+      <SectionHeader icon={Server} title="模型配置" description="配置 AI 模型端点和 API 密钥" />
       
-      <div className="space-y-4">
-        <SettingCard>
-          <p className="text-sm font-medium text-[hsl(var(--foreground))] mb-4">服务提供商</p>
-          <div className="grid grid-cols-2 gap-2">
-            {providers.map((provider) => (
-              <button
-                key={provider.id}
-                onClick={() => setSettings(s => ({ ...s, provider: provider.id, model: provider.models[0] || s.model }))}
-                className={cn(
-                  "p-4 rounded-xl transition-material text-left",
-                  settings.provider === provider.id
-                    ? "bg-[hsl(var(--accent))] ring-2 ring-[hsl(var(--primary))]"
-                    : "bg-[hsl(var(--secondary))] hover:bg-[hsl(var(--accent))]"
-                )}
-              >
-                <p className="font-medium text-[hsl(var(--foreground))]">{provider.name}</p>
-              </button>
-            ))}
-          </div>
-        </SettingCard>
+      {message && (
+        <div className={cn(
+          "flex items-center gap-2 p-4 rounded-xl mb-4",
+          message.type === 'success' ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"
+        )}>
+          {message.type === 'success' ? <Check className="h-5 w-5" /> : <AlertCircle className="h-5 w-5" />}
+          <span className="text-sm">{message.text}</span>
+        </div>
+      )}
 
-        <SettingCard>
-          <p className="text-sm font-medium text-[hsl(var(--foreground))] mb-4">API 配置</p>
-          <div className="space-y-3">
-            <div>
-              <label className="text-xs text-[hsl(var(--muted-foreground))] mb-1.5 block">API 地址 (可选)</label>
-              <input
-                type="text"
-                value={settings.base_url}
-                onChange={(e) => setSettings(s => ({ ...s, base_url: e.target.value }))}
-                placeholder="https://api.openai.com/v1"
-                className="w-full h-11 px-4 rounded-xl bg-[hsl(var(--secondary))] text-sm border-0 focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] placeholder:text-[hsl(var(--muted-foreground))]"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-[hsl(var(--muted-foreground))] mb-1.5 block">API Key</label>
-              <input
-                type="password"
-                value={settings.api_key}
-                onChange={(e) => setSettings(s => ({ ...s, api_key: e.target.value }))}
-                placeholder="sk-..."
-                className="w-full h-11 px-4 rounded-xl bg-[hsl(var(--secondary))] text-sm border-0 focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] placeholder:text-[hsl(var(--muted-foreground))]"
-              />
-            </div>
-            {currentProvider && currentProvider.models.length > 0 ? (
-              <div>
-                <label className="text-xs text-[hsl(var(--muted-foreground))] mb-1.5 block">模型</label>
-                <select
-                  value={settings.model}
-                  onChange={(e) => setSettings(s => ({ ...s, model: e.target.value }))}
-                  className="w-full h-11 px-4 rounded-xl bg-[hsl(var(--secondary))] text-sm border-0 focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
-                >
-                  {currentProvider.models.map(m => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
-                </select>
+      <div className="space-y-4">
+        {presetEndpoints.map((endpoint) => (
+          <SettingCard key={endpoint.id}>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className={cn(
+                  "flex h-10 w-10 items-center justify-center rounded-xl",
+                  endpoint.api_key_masked ? "bg-green-50" : "bg-[hsl(var(--secondary))]"
+                )}>
+                  <Server className={cn("h-5 w-5", endpoint.api_key_masked ? "text-green-600" : "")} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <p className="font-medium text-[hsl(var(--foreground))]">{endpoint.name}</p>
+                    {settings.default_endpoint_id === endpoint.id && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-[hsl(var(--primary))] text-white">默认</span>
+                    )}
+                  </div>
+                  <p className="text-sm text-[hsl(var(--muted-foreground))]">
+                    {endpoint.api_key_masked ? `已配置 (${endpoint.api_key_masked})` : '未配置'}
+                  </p>
+                </div>
               </div>
-            ) : (
-              <div>
-                <label className="text-xs text-[hsl(var(--muted-foreground))] mb-1.5 block">模型名称</label>
-                <input
-                  type="text"
-                  value={settings.model}
-                  onChange={(e) => setSettings(s => ({ ...s, model: e.target.value }))}
-                  placeholder="model-name"
-                  className="w-full h-11 px-4 rounded-xl bg-[hsl(var(--secondary))] text-sm border-0 focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] placeholder:text-[hsl(var(--muted-foreground))]"
-                />
+              <div className="flex items-center gap-2">
+                {endpoint.api_key_masked && settings.default_endpoint_id !== endpoint.id && (
+                  <button
+                    onClick={() => handleSetDefault(endpoint.id)}
+                    className="text-xs px-3 py-1.5 rounded-full bg-[hsl(var(--secondary))] hover:bg-[hsl(var(--accent))]"
+                  >
+                    设为默认
+                  </button>
+                )}
+                <button
+                  onClick={() => setEditingEndpoint(editingEndpoint === endpoint.id ? null : endpoint.id)}
+                  className="text-sm text-[hsl(var(--primary))] hover:underline"
+                >
+                  {editingEndpoint === endpoint.id ? '收起' : '配置'}
+                </button>
+              </div>
+            </div>
+
+            {editingEndpoint === endpoint.id && (
+              <div className="space-y-3 pt-4 border-t border-[hsl(var(--border))]">
+                <div>
+                  <label className="text-xs text-[hsl(var(--muted-foreground))] mb-1.5 block">API Key</label>
+                  <SecretInput
+                    value={newApiKey[endpoint.id] || ''}
+                    onChange={(v) => setNewApiKey(prev => ({ ...prev, [endpoint.id]: v }))}
+                    placeholder="输入新的 API Key"
+                    masked={endpoint.api_key_masked}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-[hsl(var(--muted-foreground))] mb-1.5 block">模型名称</label>
+                  <input
+                    type="text"
+                    value={newModel[endpoint.id] ?? endpoint.default_model}
+                    onChange={(e) => setNewModel(prev => ({ ...prev, [endpoint.id]: e.target.value }))}
+                    placeholder="如 gpt-4o, claude-3-5-sonnet-20241022"
+                    className="w-full h-11 px-4 rounded-xl bg-[hsl(var(--secondary))] text-sm border-0 focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+                  />
+                </div>
+                <div className="flex gap-2 pt-2">
+                  <button
+                    onClick={() => handleSaveEndpoint(endpoint)}
+                    disabled={isSaving}
+                    className="inline-flex items-center gap-2 h-9 px-4 rounded-full bg-[hsl(var(--primary))] text-white text-sm font-medium hover:shadow-md transition-material disabled:opacity-50"
+                  >
+                    {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                    保存
+                  </button>
+                </div>
               </div>
             )}
-          </div>
-        </SettingCard>
-
-        {testResult && (
-          <div className={cn(
-            "flex items-center gap-2 p-4 rounded-xl",
-            testResult.success ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"
-          )}>
-            {testResult.success ? <Check className="h-5 w-5" /> : <AlertCircle className="h-5 w-5" />}
-            <span className="text-sm">{testResult.message}</span>
-          </div>
-        )}
-
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleTest}
-            disabled={isTesting || !settings.api_key}
-            className="inline-flex items-center gap-2 h-10 px-5 rounded-full bg-[hsl(var(--secondary))] text-sm font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] transition-material disabled:opacity-50"
-          >
-            {isTesting && <Loader2 className="h-4 w-4 animate-spin" />}
-            测试连接
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={isSaving}
-            className="inline-flex items-center gap-2 h-10 px-5 rounded-full bg-[hsl(var(--primary))] text-white text-sm font-medium hover:shadow-md transition-material disabled:opacity-50"
-          >
-            {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            {isSaving ? "保存中..." : "保存配置"}
-          </button>
-        </div>
+          </SettingCard>
+        ))}
       </div>
     </div>
   )
 }
 
+interface DatasourceSettingsData {
+  wos: {
+    enabled: boolean
+    api_key_masked?: string
+  }
+  scopus: {
+    enabled: boolean
+    api_key_masked?: string
+    insttoken_masked?: string
+  }
+}
+
 function DataSourceSettings() {
-  const [settings, setSettings] = useState<DatasourceSettingsType>({
-    wos_api_key: "",
-    scopus_api_key: "",
-    default_databases: ["pubmed"],
-    max_results: 50
-  })
+  const [settings, setSettings] = useState<DatasourceSettingsData | null>(null)
+  const [wosApiKey, setWosApiKey] = useState('')
+  const [scopusApiKey, setScopusApiKey] = useState('')
+  const [scopusInsttoken, setScopusInsttoken] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   useEffect(() => {
-    const load = async () => {
-      const res = await settingsApi.getDatasource()
-      if (res.success && res.data) {
-        setSettings(res.data)
-      }
-      setIsLoading(false)
-    }
-    load()
+    loadSettings()
   }, [])
+
+  const loadSettings = async () => {
+    const res = await settingsApi.getDatasource()
+    if (res.success && res.data) {
+      setSettings(res.data as DatasourceSettingsData)
+    }
+    setIsLoading(false)
+  }
 
   const handleSave = async () => {
     setIsSaving(true)
-    await settingsApi.updateDatasource(settings)
+    const res = await settingsApi.updateDatasource({
+      wos: wosApiKey ? { api_key: wosApiKey } : undefined,
+      scopus: (scopusApiKey || scopusInsttoken) ? {
+        ...(scopusApiKey ? { api_key: scopusApiKey } : {}),
+        ...(scopusInsttoken ? { insttoken: scopusInsttoken } : {}),
+      } : undefined,
+    })
+    
+    if (res.success) {
+      setMessage({ type: 'success', text: '数据源配置已保存' })
+      setWosApiKey('')
+      setScopusApiKey('')
+      setScopusInsttoken('')
+      await loadSettings()
+    } else {
+      setMessage({ type: 'error', text: res.error || '保存失败' })
+    }
     setIsSaving(false)
+    setTimeout(() => setMessage(null), 3000)
   }
 
-  if (isLoading) {
+  if (isLoading || !settings) {
     return <div className="flex justify-center py-20"><Loader2 className="h-6 w-6 animate-spin" /></div>
   }
 
@@ -417,56 +499,90 @@ function DataSourceSettings() {
     <div>
       <SectionHeader icon={Database} title="数据源配置" description="配置文献数据库的 API 访问" />
       
+      {message && (
+        <div className={cn(
+          "flex items-center gap-2 p-4 rounded-xl mb-4",
+          message.type === 'success' ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"
+        )}>
+          {message.type === 'success' ? <Check className="h-5 w-5" /> : <AlertCircle className="h-5 w-5" />}
+          <span className="text-sm">{message.text}</span>
+        </div>
+      )}
+
       <div className="space-y-4">
         <SettingCard>
           <div className="flex items-center gap-3 mb-4">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-50">
-              <span className="text-lg font-bold text-orange-600">W</span>
+            <div className={cn(
+              "flex h-10 w-10 items-center justify-center rounded-xl",
+              settings.wos.api_key_masked ? "bg-orange-50" : "bg-[hsl(var(--secondary))]"
+            )}>
+              <span className={cn("text-lg font-bold", settings.wos.api_key_masked ? "text-orange-600" : "")}>W</span>
             </div>
             <div className="flex-1">
               <p className="font-medium text-[hsl(var(--foreground))]">Web of Science</p>
-              <p className="text-sm text-[hsl(var(--muted-foreground))]">Clarivate Analytics</p>
+              <p className="text-sm text-[hsl(var(--muted-foreground))]">
+                {settings.wos.api_key_masked ? `已配置 (${settings.wos.api_key_masked})` : '未配置'}
+              </p>
             </div>
             <a href="https://developer.clarivate.com/" target="_blank" rel="noopener noreferrer" className="text-sm text-[hsl(var(--primary))] hover:underline flex items-center gap-1">
               获取 API Key
               <ExternalLink className="h-3 w-3" />
             </a>
           </div>
-          <input
-            type="password"
-            value={settings.wos_api_key}
-            onChange={(e) => setSettings(s => ({ ...s, wos_api_key: e.target.value }))}
-            placeholder="输入 Web of Science API Key"
-            className="w-full h-11 px-4 rounded-xl bg-[hsl(var(--secondary))] text-sm border-0 focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] placeholder:text-[hsl(var(--muted-foreground))]"
+          <SecretInput
+            value={wosApiKey}
+            onChange={setWosApiKey}
+            placeholder="输入新的 API Key"
+            masked={settings.wos.api_key_masked}
           />
         </SettingCard>
 
         <SettingCard>
           <div className="flex items-center gap-3 mb-4">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-50">
-              <span className="text-lg font-bold text-orange-500">S</span>
+            <div className={cn(
+              "flex h-10 w-10 items-center justify-center rounded-xl",
+              settings.scopus.api_key_masked ? "bg-orange-50" : "bg-[hsl(var(--secondary))]"
+            )}>
+              <span className={cn("text-lg font-bold", settings.scopus.api_key_masked ? "text-orange-500" : "")}>S</span>
             </div>
             <div className="flex-1">
               <p className="font-medium text-[hsl(var(--foreground))]">Scopus</p>
-              <p className="text-sm text-[hsl(var(--muted-foreground))]">Elsevier</p>
+              <p className="text-sm text-[hsl(var(--muted-foreground))]">
+                {settings.scopus.api_key_masked ? `已配置 (${settings.scopus.api_key_masked})` : '未配置'}
+              </p>
             </div>
             <a href="https://dev.elsevier.com/" target="_blank" rel="noopener noreferrer" className="text-sm text-[hsl(var(--primary))] hover:underline flex items-center gap-1">
               获取 API Key
               <ExternalLink className="h-3 w-3" />
             </a>
           </div>
-          <input
-            type="password"
-            value={settings.scopus_api_key}
-            onChange={(e) => setSettings(s => ({ ...s, scopus_api_key: e.target.value }))}
-            placeholder="输入 Scopus API Key"
-            className="w-full h-11 px-4 rounded-xl bg-[hsl(var(--secondary))] text-sm border-0 focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] placeholder:text-[hsl(var(--muted-foreground))]"
-          />
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs text-[hsl(var(--muted-foreground))] mb-1.5 block">API Key</label>
+              <SecretInput
+                value={scopusApiKey}
+                onChange={setScopusApiKey}
+                placeholder="输入新的 API Key"
+                masked={settings.scopus.api_key_masked}
+              />
+            </div>
+            <div>
+              <label className="text-xs text-[hsl(var(--muted-foreground))] mb-1.5 block">
+                Insttoken <span className="text-[hsl(var(--muted-foreground))]">(可选，用于获取完整摘要)</span>
+              </label>
+              <SecretInput
+                value={scopusInsttoken}
+                onChange={setScopusInsttoken}
+                placeholder="输入机构令牌"
+                masked={settings.scopus.insttoken_masked}
+              />
+            </div>
+          </div>
         </SettingCard>
 
         <button
           onClick={handleSave}
-          disabled={isSaving}
+          disabled={isSaving || (!wosApiKey && !scopusApiKey && !scopusInsttoken)}
           className="inline-flex items-center gap-2 h-10 px-5 rounded-full bg-[hsl(var(--primary))] text-white text-sm font-medium hover:shadow-md transition-material disabled:opacity-50"
         >
           {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
@@ -481,9 +597,13 @@ function EnvironmentSettings() {
   const [envInfo, setEnvInfo] = useState<{
     node_version: string
     platform: string
-    disk_space: { total: string; free: string; used_percent: string }
-    data_directory: string
+    arch: string
+    data_dir: string
+    data_dir_exists: boolean
+    data_dir_size: string
     supabase_connected: boolean
+    llm_configured: boolean
+    default_endpoint: string
   } | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isChecking, setIsChecking] = useState(false)
@@ -492,7 +612,7 @@ function EnvironmentSettings() {
     setIsChecking(true)
     const res = await settingsApi.getEnvironment()
     if (res.success && res.data) {
-      setEnvInfo(res.data)
+      setEnvInfo(res.data as typeof envInfo)
     }
     setIsLoading(false)
     setIsChecking(false)
@@ -539,11 +659,7 @@ function EnvironmentSettings() {
               </div>
               <div className="flex items-center gap-2 text-sm">
                 <Check className="h-4 w-4 text-green-500" />
-                <span className="text-[hsl(var(--foreground))]">平台: {envInfo.platform}</span>
-              </div>
-              <div className="flex items-center gap-2 text-sm">
-                <Check className="h-4 w-4 text-green-500" />
-                <span className="text-[hsl(var(--foreground))]">磁盘空间: {envInfo.disk_space.free} 可用 ({envInfo.disk_space.used_percent} 已用)</span>
+                <span className="text-[hsl(var(--foreground))]">平台: {envInfo.platform} ({envInfo.arch})</span>
               </div>
               <div className="flex items-center gap-2 text-sm">
                 {envInfo.supabase_connected ? (
@@ -553,6 +669,26 @@ function EnvironmentSettings() {
                 )}
                 <span className="text-[hsl(var(--foreground))]">
                   Supabase: {envInfo.supabase_connected ? "已连接" : "未连接"}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                {envInfo.llm_configured ? (
+                  <Check className="h-4 w-4 text-green-500" />
+                ) : (
+                  <AlertCircle className="h-4 w-4 text-amber-500" />
+                )}
+                <span className="text-[hsl(var(--foreground))]">
+                  LLM: {envInfo.llm_configured ? envInfo.default_endpoint : "未配置"}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                {envInfo.data_dir_exists ? (
+                  <Check className="h-4 w-4 text-green-500" />
+                ) : (
+                  <AlertCircle className="h-4 w-4 text-amber-500" />
+                )}
+                <span className="text-[hsl(var(--foreground))]">
+                  数据目录: {envInfo.data_dir_size}
                 </span>
               </div>
             </div>
@@ -567,7 +703,7 @@ function EnvironmentSettings() {
               </div>
               <div>
                 <p className="font-medium text-[hsl(var(--foreground))]">数据目录</p>
-                <p className="text-sm text-[hsl(var(--muted-foreground))] font-mono">{envInfo?.data_directory || "./data"}</p>
+                <p className="text-sm text-[hsl(var(--muted-foreground))] font-mono">{envInfo?.data_dir || "./data"}</p>
               </div>
             </div>
           </div>

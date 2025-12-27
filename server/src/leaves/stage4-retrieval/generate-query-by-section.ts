@@ -7,6 +7,52 @@ import type { ToolInput, ToolResult } from '../types.js';
 import { callLLM, getPrompt } from '../utils.js';
 import type { ChatMessage } from '../../types/llm.js';
 
+// 清理 JSON 字符串中的特殊字符
+function cleanJsonString(str: string): string {
+  // 移除 BOM 和零宽字符
+  str = str.replace(/[\uFEFF\u200B-\u200D\u2060]/g, '');
+  
+  // 移除控制字符（保留换行、回车、制表符）
+  str = str.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+  
+  // 处理字符串内的换行符（转义）
+  let result = '';
+  let inString = false;
+  let escapeNext = false;
+  
+  for (let i = 0; i < str.length; i++) {
+    const char = str[i];
+    
+    if (escapeNext) {
+      result += char;
+      escapeNext = false;
+      continue;
+    }
+    
+    if (char === '\\') {
+      result += char;
+      escapeNext = true;
+      continue;
+    }
+    
+    if (char === '"') {
+      inString = !inString;
+      result += char;
+      continue;
+    }
+    
+    // 在字符串内部，将实际换行转为 \n
+    if (inString && (char === '\n' || char === '\r')) {
+      result += '\\n';
+      continue;
+    }
+    
+    result += char;
+  }
+  
+  return result;
+}
+
 const QUERY_GENERATION_PROMPT = `你是一个学术文献检索专家，精通 Web of Science 和 Scopus 数据库的检索语法。
 
 ## 任务
@@ -64,6 +110,9 @@ ${framework?.content || topic}
     if (jsonMatch) {
       jsonStr = jsonMatch[0];
     }
+    
+    // 清理可能导致解析失败的字符
+    jsonStr = cleanJsonString(jsonStr);
     
     const parsed = JSON.parse(jsonStr);
     (ctx.state as any).queries = parsed;

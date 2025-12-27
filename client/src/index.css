@@ -182,3 +182,114 @@
     opacity: 0.12;
   }
 }
+
+/* 星空背景 */
+.starfield {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.starfield::before,
+.starfield::after {
+  content: '';
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  background: white;
+  border-radius: 50%;
+  box-shadow:
+    100px 50px 0 0 rgba(255,255,255,0.3),
+    200px 150px 0 0 rgba(255,255,255,0.2),
+    300px 80px 0 0 rgba(255,255,255,0.4),
+    400px 200px 0 0 rgba(255,255,255,0.2),
+    500px 100px 0 0 rgba(255,255,255,0.3),
+    600px 250px 0 0 rgba(255,255,255,0.2),
+    700px 50px 0 0 rgba(255,255,255,0.4),
+    800px 180px 0 0 rgba(255,255,255,0.3),
+    150px 300px 0 0 rgba(255,255,255,0.2),
+    250px 400px 0 0 rgba(255,255,255,0.3),
+    350px 350px 0 0 rgba(255,255,255,0.2),
+    450px 450px 0 0 rgba(255,255,255,0.4),
+    550px 380px 0 0 rgba(255,255,255,0.2),
+    650px 420px 0 0 rgba(255,255,255,0.3),
+    750px 320px 0 0 rgba(255,255,255,0.2),
+    850px 400px 0 0 rgba(255,255,255,0.3),
+    50px 500px 0 0 rgba(255,255,255,0.2),
+    180px 550px 0 0 rgba(255,255,255,0.3),
+    320px 520px 0 0 rgba(255,255,255,0.2),
+    480px 580px 0 0 rgba(255,255,255,0.4);
+  animation: twinkle 4s ease-in-out infinite;
+}
+
+.starfield::after {
+  animation-delay: 2s;
+  transform: translateX(50px) translateY(30px);
+}
+
+@keyframes twinkle {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.8; }
+}
+
+/* 流光边框效果 */
+.glow-border {
+  position: relative;
+  background: hsl(var(--card));
+  border-radius: 28px;
+  overflow: hidden;
+}
+
+.glow-border::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 28px;
+  padding: 2px;
+  background: linear-gradient(
+    135deg,
+    hsl(var(--primary) / 0.3),
+    hsl(var(--primary) / 0.1),
+    transparent,
+    transparent,
+    hsl(var(--primary) / 0.1),
+    hsl(var(--primary) / 0.3)
+  );
+  background-size: 400% 400%;
+  -webkit-mask: 
+    linear-gradient(#fff 0 0) content-box, 
+    linear-gradient(#fff 0 0);
+  mask: 
+    linear-gradient(#fff 0 0) content-box, 
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+
+.glow-border:hover::before,
+.glow-border:focus-within::before {
+  opacity: 1;
+  animation: glow-flow 3s linear infinite;
+}
+
+@keyframes glow-flow {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* 功能卡片样式 - 已移除，使用内联样式 */
+
+/* 隐藏滚动条但保持滚动功能 */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}

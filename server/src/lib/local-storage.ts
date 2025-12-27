@@ -148,8 +148,23 @@ export async function writeLocalDatabase(db: LocalDatabase): Promise<void> {
     
     db._meta.last_synced = new Date().toISOString();
     
-    // 直接写入文件而不是使用临时文件重命名（避免并发问题）
-    await fs.writeFile(dbPath, JSON.stringify(db, null, 2), 'utf-8');
+    // 先序列化验证 JSON 有效性
+    const jsonContent = JSON.stringify(db, null, 2);
+    
+    // 验证序列化后的内容可以被解析
+    try {
+      JSON.parse(jsonContent);
+    } catch (e) {
+      console.error('[LocalStorage] 序列化验证失败，跳过写入');
+      return;
+    }
+    
+    // 使用临时文件+重命名确保原子写入
+    const tempPath = dbPath + '.tmp.' + Date.now();
+    await fs.writeFile(tempPath, jsonContent, 'utf-8');
+    await fs.rename(tempPath, dbPath);
+  } catch (err) {
+    console.error('[LocalStorage] 写入失败:', err);
   } finally {
     resolve!();
   }

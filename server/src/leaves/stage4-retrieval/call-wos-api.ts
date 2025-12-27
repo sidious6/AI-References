@@ -5,6 +5,7 @@
  */
 import type { ToolInput, ToolResult } from '../types.js';
 import { config } from '../../config/index.js';
+import { settingsService } from '../../services/settings.service.js';
 
 interface QueryItem {
   section: string;
@@ -13,7 +14,10 @@ interface QueryItem {
 }
 
 export async function callWosApi({ ctx }: ToolInput): Promise<ToolResult> {
-  const key = config.apis.wosApiKey;
+  // 动态获取配置，优先使用数据库配置
+  const dsConfig = await settingsService.getEffectiveDatasourceConfig();
+  const key = dsConfig.wos.apiKey;
+  
   if (!key) {
     console.log('[WOS API] 跳过: WOS_API_KEY 未配置');
     ctx.state.logs.push('WOS 检索跳过: API Key 未配置');

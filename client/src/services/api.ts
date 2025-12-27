@@ -414,20 +414,33 @@ export const chapterApi = {
 };
 
 // Settings API
-export interface ModelSettings {
-  provider: string;
-  model: string;
-  api_key: string;
+export interface ModelEndpoint {
+  id: string;
+  name: string;
+  protocol: 'openai' | 'anthropic' | 'google';
   base_url: string;
-  temperature: number;
-  max_tokens: number;
+  api_key: string;
+  api_key_masked?: string;
+  default_model: string;
+  is_preset: boolean;
+  enabled: boolean;
+}
+
+export interface ModelSettings {
+  default_endpoint_id: string;
+  endpoints: ModelEndpoint[];
 }
 
 export interface DatasourceSettings {
-  wos_api_key: string;
-  scopus_api_key: string;
-  default_databases: string[];
-  max_results: number;
+  wos: {
+    enabled: boolean;
+    api_key_masked?: string;
+  };
+  scopus: {
+    enabled: boolean;
+    api_key_masked?: string;
+    insttoken_masked?: string;
+  };
 }
 
 export interface GeneralSettings {
@@ -450,14 +463,21 @@ export const settingsApi = {
     }),
   
   getModel: () => request<ModelSettings>('/settings/model'),
-  updateModel: (data: Partial<ModelSettings>) =>
+  updateModel: (data: {
+    default_endpoint_id?: string;
+    endpoint?: Partial<ModelEndpoint> & { id: string };
+    delete_endpoint_id?: string;
+  }) =>
     request<ModelSettings>('/settings/model', {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
   
   getDatasource: () => request<DatasourceSettings>('/settings/datasource'),
-  updateDatasource: (data: Partial<DatasourceSettings>) =>
+  updateDatasource: (data: {
+    wos?: { enabled?: boolean; api_key?: string };
+    scopus?: { enabled?: boolean; api_key?: string; insttoken?: string };
+  }) =>
     request<DatasourceSettings>('/settings/datasource', {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -473,15 +493,19 @@ export const settingsApi = {
   getEnvironment: () => request<{
     node_version: string;
     platform: string;
-    disk_space: { total: string; free: string; used_percent: string };
-    data_directory: string;
+    arch: string;
+    data_dir: string;
+    data_dir_exists: boolean;
+    data_dir_size: string;
     supabase_connected: boolean;
+    llm_configured: boolean;
+    default_endpoint: string;
   }>('/settings/environment'),
   
-  testLLM: (config?: Partial<ModelSettings>) =>
-    request<{ success: boolean; message: string; response?: string }>('/settings/test-llm', {
+  testLLM: (endpointId?: string) =>
+    request<{ success: boolean; message: string }>('/settings/test-llm', {
       method: 'POST',
-      body: JSON.stringify(config || {}),
+      body: JSON.stringify({ endpoint_id: endpointId }),
     }),
 };
 

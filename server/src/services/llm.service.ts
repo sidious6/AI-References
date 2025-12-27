@@ -2,60 +2,51 @@ import OpenAI from 'openai';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config/index.js';
+import { settingsService } from './settings.service.js';
 import type {
   LLMProvider,
-  ChatMessage,
   ChatCompletionOptions,
   ChatCompletionResponse,
   StreamChunk,
 } from '../types/llm.js';
 
 class LLMService {
-  private arkClient: OpenAI | null = null;
-  private openaiClient: OpenAI | null = null;
-  private googleClient: GoogleGenerativeAI | null = null;
-  private anthropicClient: Anthropic | null = null;
-
-  constructor() {
-    this.initClients();
+  // 动态获取客户端配置
+  private async getClientConfig(provider: LLMProvider): Promise<{
+    apiKey: string;
+    baseUrl: string;
+    model: string;
+  } | null> {
+    // 映射 provider 到 endpoint id
+    const endpointMap: Record<LLMProvider, string> = {
+      ark: 'ark',
+      openai: 'openai',
+      google: 'google',
+      anthropic: 'anthropic',
+    };
+    
+    const endpointId = endpointMap[provider];
+    return settingsService.getEffectiveApiKey(endpointId);
   }
 
-  private initClients() {
-    // 火山引擎 DeepSeek (使用 OpenAI 兼容接口)
-    if (config.llm.ark.apiKey) {
-      this.arkClient = new OpenAI({
-        apiKey: config.llm.ark.apiKey,
-        baseURL: config.llm.ark.baseUrl,
-      });
-    }
-
-    // OpenAI
-    if (config.llm.openai.apiKey) {
-      this.openaiClient = new OpenAI({
-        apiKey: config.llm.openai.apiKey,
-        baseURL: config.llm.openai.baseUrl,
-      });
-    }
-
-    // Google Gemini
-    if (config.llm.google.apiKey) {
-      this.googleClient = new GoogleGenerativeAI(config.llm.google.apiKey);
-    }
-
-    // Anthropic Claude
-    if (config.llm.anthropic.apiKey) {
-      this.anthropicClient = new Anthropic({
-        apiKey: config.llm.anthropic.apiKey,
-      });
-    }
-  }
-
-  getAvailableProviders(): LLMProvider[] {
+  async getAvailableProviders(): Promise<LLMProvider[]> {
     const providers: LLMProvider[] = [];
-    if (this.arkClient) providers.push('ark');
-    if (this.openaiClient) providers.push('openai');
-    if (this.googleClient) providers.push('google');
-    if (this.anthropicClient) providers.push('anthropic');
+    const modelSettings = await settingsService.getModel();
+    
+    for (const endpoint of modelSettings.endpoints) {
+      if (endpoint.enabled && endpoint.api_key_masked) {
+        const providerMap: Record<string, LLMProvider> = {
+          ark: 'ark',
+          openai: 'openai',
+          google: 'google',
+          anthropic: 'anthropic',
+        };
+        const provider = providerMap[endpoint.id];
+        if (provider && !providers.includes(provider)) {
+          providers.push(provider);
+        }
+      }
+    }
     return providers;
   }
 
@@ -65,9 +56,9 @@ class LLMService {
   ): Promise<ChatCompletionResponse> {
     switch (provider) {
       case 'ark':
-        return this.chatWithArk(options);
+        return this.chatWithOpenAICompatible('ark', options);
       case 'openai':
-        return this.chatWithOpenAI(options);
+        return this.chatWithOpenAICompatible('openai', options);
       case 'google':
         return this.chatWithGoogle(options);
       case 'anthropic':
@@ -83,10 +74,10 @@ class LLMService {
   ): AsyncGenerator<StreamChunk> {
     switch (provider) {
       case 'ark':
-        yield* this.streamWithArk(options);
+        yield* this.streamWithOpenAICompatible('ark', options);
         break;
       case 'openai':
-        yield* this.streamWithOpenAI(options);
+        yield* this.streamWithOpenAICompatible('openai', options);
         break;
       case 'google':
         yield* this.streamWithGoogle(options);
@@ -99,12 +90,21 @@ class LLMService {
     }
   }
 
-  // 火山引擎 DeepSeek
-  private async chatWithArk(options: ChatCompletionOptions): Promise<ChatCompletionResponse> {
-    if (!this.arkClient) throw new Error('Ark client not initialized');
+  // OpenAI 兼容接口 (OpenAI, Ark, DeepSeek, Qwen 等)
+  private async chatWithOpenAICompatible(
+    endpointId: string,
+    options: ChatCompletionOptions
+  ): Promise<ChatCompletionResponse> {
+    const clientConfig = await this.getClientConfig(endpointId as LLMProvider);
+    if (!clientConfig) throw new Error(`${endpointId} client not configured`);
 
-    const completion = await this.arkClient.chat.completions.create({
-      model: options.model || config.llm.ark.model,
+    const client = new OpenAI({
+      apiKey: clientConfig.apiKey,
+      baseURL: clientConfig.baseUrl,
+    });
+
+    const completion = await client.chat.completions.create({
+      model: options.model || clientConfig.model,
       messages: options.messages,
       temperature: options.temperature,
       max_tokens: options.maxTokens,
@@ -113,7 +113,7 @@ class LLMService {
     return {
       content: completion.choices[0]?.message?.content || '',
       model: completion.model,
-      provider: 'ark',
+      provider: endpointId as LLMProvider,
       usage: completion.usage ? {
         promptTokens: completion.usage.prompt_tokens,
         completionTokens: completion.usage.completion_tokens,
@@ -122,53 +122,20 @@ class LLMService {
     };
   }
 
-  private async *streamWithArk(options: ChatCompletionOptions): AsyncGenerator<StreamChunk> {
-    if (!this.arkClient) throw new Error('Ark client not initialized');
+  private async *streamWithOpenAICompatible(
+    endpointId: string,
+    options: ChatCompletionOptions
+  ): AsyncGenerator<StreamChunk> {
+    const clientConfig = await this.getClientConfig(endpointId as LLMProvider);
+    if (!clientConfig) throw new Error(`${endpointId} client not configured`);
 
-    const stream = await this.arkClient.chat.completions.create({
-      model: options.model || config.llm.ark.model,
-      messages: options.messages,
-      temperature: options.temperature,
-      max_tokens: options.maxTokens,
-      stream: true,
+    const client = new OpenAI({
+      apiKey: clientConfig.apiKey,
+      baseURL: clientConfig.baseUrl,
     });
 
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content || '';
-      const finishReason = chunk.choices[0]?.finish_reason;
-      const done = finishReason === 'stop' || finishReason === 'length';
-      yield { content, done };
-    }
-  }
-
-  // OpenAI GPT
-  private async chatWithOpenAI(options: ChatCompletionOptions): Promise<ChatCompletionResponse> {
-    if (!this.openaiClient) throw new Error('OpenAI client not initialized');
-
-    const completion = await this.openaiClient.chat.completions.create({
-      model: options.model || config.llm.openai.model,
-      messages: options.messages,
-      temperature: options.temperature,
-      max_tokens: options.maxTokens,
-    });
-
-    return {
-      content: completion.choices[0]?.message?.content || '',
-      model: completion.model,
-      provider: 'openai',
-      usage: completion.usage ? {
-        promptTokens: completion.usage.prompt_tokens,
-        completionTokens: completion.usage.completion_tokens,
-        totalTokens: completion.usage.total_tokens,
-      } : undefined,
-    };
-  }
-
-  private async *streamWithOpenAI(options: ChatCompletionOptions): AsyncGenerator<StreamChunk> {
-    if (!this.openaiClient) throw new Error('OpenAI client not initialized');
-
-    const stream = await this.openaiClient.chat.completions.create({
-      model: options.model || config.llm.openai.model,
+    const stream = await client.chat.completions.create({
+      model: options.model || clientConfig.model,
       messages: options.messages,
       temperature: options.temperature,
       max_tokens: options.maxTokens,
@@ -185,10 +152,12 @@ class LLMService {
 
   // Google Gemini
   private async chatWithGoogle(options: ChatCompletionOptions): Promise<ChatCompletionResponse> {
-    if (!this.googleClient) throw new Error('Google client not initialized');
+    const clientConfig = await this.getClientConfig('google');
+    if (!clientConfig) throw new Error('Google client not configured');
 
-    const model = this.googleClient.getGenerativeModel({
-      model: options.model || config.llm.google.model,
+    const client = new GoogleGenerativeAI(clientConfig.apiKey);
+    const model = client.getGenerativeModel({
+      model: options.model || clientConfig.model,
     });
 
     const systemMessage = options.messages.find(m => m.role === 'system');
@@ -212,16 +181,18 @@ class LLMService {
 
     return {
       content: response.text(),
-      model: options.model || config.llm.google.model,
+      model: options.model || clientConfig.model,
       provider: 'google',
     };
   }
 
   private async *streamWithGoogle(options: ChatCompletionOptions): AsyncGenerator<StreamChunk> {
-    if (!this.googleClient) throw new Error('Google client not initialized');
+    const clientConfig = await this.getClientConfig('google');
+    if (!clientConfig) throw new Error('Google client not configured');
 
-    const model = this.googleClient.getGenerativeModel({
-      model: options.model || config.llm.google.model,
+    const client = new GoogleGenerativeAI(clientConfig.apiKey);
+    const model = client.getGenerativeModel({
+      model: options.model || clientConfig.model,
     });
 
     const systemMessage = options.messages.find(m => m.role === 'system');
@@ -251,13 +222,18 @@ class LLMService {
 
   // Anthropic Claude
   private async chatWithAnthropic(options: ChatCompletionOptions): Promise<ChatCompletionResponse> {
-    if (!this.anthropicClient) throw new Error('Anthropic client not initialized');
+    const clientConfig = await this.getClientConfig('anthropic');
+    if (!clientConfig) throw new Error('Anthropic client not configured');
+
+    const client = new Anthropic({
+      apiKey: clientConfig.apiKey,
+    });
 
     const systemMessage = options.messages.find(m => m.role === 'system');
     const userMessages = options.messages.filter(m => m.role !== 'system');
 
-    const response = await this.anthropicClient.messages.create({
-      model: options.model || config.llm.anthropic.model,
+    const response = await client.messages.create({
+      model: options.model || clientConfig.model,
       max_tokens: options.maxTokens || 4096,
       system: systemMessage?.content,
       messages: userMessages.map(m => ({
@@ -281,13 +257,18 @@ class LLMService {
   }
 
   private async *streamWithAnthropic(options: ChatCompletionOptions): AsyncGenerator<StreamChunk> {
-    if (!this.anthropicClient) throw new Error('Anthropic client not initialized');
+    const clientConfig = await this.getClientConfig('anthropic');
+    if (!clientConfig) throw new Error('Anthropic client not configured');
+
+    const client = new Anthropic({
+      apiKey: clientConfig.apiKey,
+    });
 
     const systemMessage = options.messages.find(m => m.role === 'system');
     const userMessages = options.messages.filter(m => m.role !== 'system');
 
-    const stream = await this.anthropicClient.messages.stream({
-      model: options.model || config.llm.anthropic.model,
+    const stream = await client.messages.stream({
+      model: options.model || clientConfig.model,
       max_tokens: options.maxTokens || 4096,
       system: systemMessage?.content,
       messages: userMessages.map(m => ({

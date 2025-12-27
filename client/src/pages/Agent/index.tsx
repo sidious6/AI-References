@@ -2,13 +2,14 @@ import { useState, useEffect, useRef, useCallback } from "react"
 import { 
   ChevronDown, ChevronRight, Send, Loader2, Sparkles, 
   FileText, BookOpen, ListTree, PanelRightClose, PanelRightOpen,
-  Plus, MessageSquare, Menu, Trash2, AlertTriangle, Check, Circle, X, Eye,
+  Plus, MessageSquare, Trash2, AlertTriangle, Check, Circle, X, Eye,
   RotateCcw
 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { cn } from "@/lib/utils"
 import { agentApi, type AgentSession, type AgentMessage, type TempAsset, type WorkflowResumeInfo } from "@/services/api"
+import { useSidebarStore } from "@/stores/sidebar.store"
 
 type Mode = "human-in-loop" | "agent"
 type Provider = "ark" | "openai" | "google" | "anthropic"
@@ -45,11 +46,13 @@ const STAGE_NAMES: Record<number, string> = {
 const getWorkflowStorageKey = (sessionId: string) => `agent_workflow_${sessionId}`
 
 export function AgentPage() {
-  const [mode, setMode] = useState<Mode>("human-in-loop")
+  const [mode, setMode] = useState<Mode>("agent")
   const [provider, setProvider] = useState<Provider>("ark")
   const [input, setInput] = useState("")
   const [isAssetPanelOpen, setIsAssetPanelOpen] = useState(false)
-  const [isHistoryOpen, setIsHistoryOpen] = useState(true)
+  
+  // Sidebar store
+  const { setCollapsed: setSidebarCollapsed } = useSidebarStore()
   
   // Session state
   const [sessions, setSessions] = useState<AgentSession[]>([])
@@ -354,6 +357,13 @@ export function AgentPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages, streamingContent, stages])
+
+  // 工作流运行时自动收起左侧 sidebar
+  useEffect(() => {
+    if (isStreaming) {
+      setSidebarCollapsed(true)
+    }
+  }, [isStreaming, setSidebarCollapsed])
 
   // 创建新会话
   const handleNewSession = async () => {
@@ -915,128 +925,149 @@ export function AgentPage() {
   const totalStages = stages.length
   const runningStage = stages.find(s => s.status === "running")
 
-  return (
-    <div className="flex h-screen">
-      {/* History Sidebar */}
-      <aside className={cn(
-        "flex flex-col bg-[hsl(var(--card))] border-r border-[hsl(var(--border))] transition-all duration-300",
-        isHistoryOpen ? "w-56" : "w-0 overflow-hidden border-r-0"
-      )}>
-        <div className="p-3 flex items-center justify-between">
-          <button 
-            onClick={() => setIsHistoryOpen(false)}
-            className="p-2 rounded-lg hover:bg-[hsl(var(--secondary))] transition-material"
-          >
-            <Menu className="h-5 w-5 text-[hsl(var(--muted-foreground))]" strokeWidth={1.5} />
-          </button>
-          <button 
-            onClick={handleNewSession}
-            className="p-2 rounded-lg hover:bg-[hsl(var(--secondary))] transition-material"
-          >
-            <Plus className="h-5 w-5 text-[hsl(var(--muted-foreground))]" strokeWidth={1.5} />
-          </button>
-        </div>
-        <div className="flex-1 overflow-auto px-2 pb-2">
-          <p className="px-2 py-2 text-xs font-medium text-[hsl(var(--muted-foreground))]">最近对话</p>
-          {sessions.length === 0 ? (
-            <p className="px-2 py-4 text-xs text-[hsl(var(--muted-foreground))] text-center">
-              暂无对话记录
-            </p>
-          ) : (
-            sessions.map((session) => (
-              <button
-                key={session.id}
-                onClick={() => {
-                  if (isStreaming) return
-                  setStreamingContent("")
-                  setActiveSessionId(session.id)
-                }}
-                className={cn(
-                  "w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-left transition-material group",
-                  activeSessionId === session.id
-                    ? "bg-[hsl(var(--secondary))]"
-                    : "hover:bg-[hsl(var(--secondary))]",
-                  isStreaming && "opacity-50 cursor-not-allowed"
-                )}
-                disabled={isStreaming}
-              >
-                <MessageSquare className="h-4 w-4 text-[hsl(var(--muted-foreground))] shrink-0" strokeWidth={1.5} />
-                <span className="flex-1 text-sm truncate">
-                  {session.title || "新对话"}
-                </span>
-                <button 
-                  onClick={(e) => handleDeleteSession(session.id, e)}
-                  className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-[hsl(var(--accent))] transition-material"
-                >
-                  <Trash2 className="h-3.5 w-3.5 text-[hsl(var(--muted-foreground))]" />
-                </button>
-              </button>
-            ))
-          )}
-        </div>
-      </aside>
+  // 判断是否在欢迎页（无活跃会话且无消息）
+  const isWelcomePage = !activeSessionId && messages.length === 0
 
+  return (
+    <div className="flex h-screen bg-[hsl(var(--background))]">
       {/* Main Content */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Top Bar */}
-        <div className="px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            {!isHistoryOpen && (
-              <>
-                <button 
-                  onClick={() => setIsHistoryOpen(true)}
-                  className="p-2 rounded-lg hover:bg-[hsl(var(--secondary))] transition-material"
-                >
-                  <Menu className="h-5 w-5 text-[hsl(var(--muted-foreground))]" strokeWidth={1.5} />
-                </button>
-                <button 
-                  onClick={handleNewSession}
-                  className="p-2 rounded-lg hover:bg-[hsl(var(--secondary))] transition-material"
-                >
-                  <Plus className="h-5 w-5 text-[hsl(var(--muted-foreground))]" strokeWidth={1.5} />
-                </button>
-              </>
+      <div className="flex-1 flex flex-col min-w-0 relative">
+        {/* 星空背景 - 仅在欢迎页显示 */}
+        {isWelcomePage && (
+          <div className="starfield" />
+        )}
+
+        {/* Top Bar - 仅在对话页显示 */}
+        {!isWelcomePage && (
+          <div className="px-4 py-3 flex items-center justify-center border-b border-[hsl(var(--border))] relative">
+            <span className="text-sm font-medium text-[hsl(var(--foreground))] truncate max-w-[400px]">
+              {sessions.find(s => s.id === activeSessionId)?.title || "新对话"}
+            </span>
+            {!isAssetPanelOpen && (
+              <button 
+                onClick={() => setIsAssetPanelOpen(true)}
+                className="absolute right-4 p-2 rounded-lg hover:bg-[hsl(var(--secondary))] transition-material"
+              >
+                <PanelRightOpen className="h-5 w-5 text-[hsl(var(--muted-foreground))]" strokeWidth={1.5} />
+              </button>
             )}
           </div>
-          {!isAssetPanelOpen && (
-            <button 
-              onClick={() => setIsAssetPanelOpen(true)}
-              className="p-2 rounded-lg hover:bg-[hsl(var(--secondary))] transition-material"
-            >
-              <PanelRightOpen className="h-5 w-5 text-[hsl(var(--muted-foreground))]" strokeWidth={1.5} />
-            </button>
-          )}
-        </div>
+        )}
 
         {/* Canvas Content */}
         <div className="flex-1 overflow-auto">
-          <div className="max-w-3xl mx-auto px-6 py-6">
-            {messages.length === 0 && !isStreaming && !streamingContent ? (
-              // Welcome screen
-              <div className="flex flex-col items-center justify-center min-h-[60vh]">
-                <h1 className="text-2xl font-medium text-[hsl(var(--foreground))] mb-2">
+          {isWelcomePage ? (
+            // Welcome screen - Gemini 风格
+            <div className="flex flex-col items-center justify-center min-h-full px-6 py-16 relative z-10">
+              <div className="flex-1 flex flex-col items-center justify-center max-w-4xl w-full">
+                <h1 className="text-4xl font-medium text-[hsl(var(--foreground))] mb-4">
                   Deep-reference Agent
                 </h1>
-                <p className="text-[hsl(var(--muted-foreground))] text-center max-w-md mb-8">
-                  输入你的研究方向，我将帮助你完成文献检索与综述生成
+                <p className="text-[hsl(var(--muted-foreground))] text-center text-lg max-w-lg mb-16">
+                  输入你的研究方向，开启文献探索之旅
                 </p>
-                <div className="flex flex-wrap justify-center gap-2">
-                  <SuggestionChip 
-                    icon={Sparkles} 
-                    label="面向多源数据的非法行为线索挖掘" 
-                    onClick={() => handleSuggestionClick("面向多源数据的非法行为线索挖掘")}
-                  />
-                  <SuggestionChip 
-                    icon={Sparkles} 
-                    label="大语言模型在医疗领域的应用" 
-                    onClick={() => handleSuggestionClick("大语言模型在医疗领域的应用")}
-                  />
+                
+                {/* 居中大输入框 + 流光效果 */}
+                <div className="w-full max-w-3xl glow-border mb-20">
+                  <div className="px-6 py-5">
+                    <textarea
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault()
+                          handleSend()
+                        }
+                      }}
+                      placeholder="描述你的研究方向..."
+                      className="w-full resize-none bg-transparent text-base placeholder:text-[hsl(var(--muted-foreground))] focus:outline-none text-[hsl(var(--foreground))]"
+                      rows={2}
+                      style={{ minHeight: '56px', maxHeight: '200px' }}
+                      onInput={(e) => {
+                        const target = e.target as HTMLTextAreaElement
+                        target.style.height = '56px'
+                        target.style.height = Math.min(target.scrollHeight, 200) + 'px'
+                      }}
+                      disabled={isStreaming}
+                    />
+                    <div className="flex items-center justify-between mt-4 pt-4 border-t border-[hsl(var(--border))]/30">
+                      <div className="flex items-center gap-3">
+                        <ModelSelector
+                          value={provider}
+                          onChange={(v) => setProvider(v as Provider)}
+                          disabled={isStreaming}
+                        />
+                        <ModeSelector
+                          value={mode}
+                          onChange={(v) => setMode(v as Mode)}
+                          disabled={isStreaming}
+                        />
+                      </div>
+                      <button
+                        onClick={handleSend}
+                        className={cn(
+                          "flex h-11 w-11 items-center justify-center rounded-full transition-all duration-200",
+                          input.trim() && !isStreaming
+                            ? "bg-[hsl(var(--primary))] text-white hover:opacity-90 active:scale-95"
+                            : "bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] cursor-not-allowed"
+                        )}
+                        disabled={!input.trim() || isStreaming}
+                      >
+                        {isStreaming ? (
+                          <Loader2 className="h-5 w-5 animate-spin" strokeWidth={2} />
+                        ) : (
+                          <Send className="h-5 w-5" strokeWidth={2} />
+                        )}
+                      </button>
+                    </div>
+                  </div>
                 </div>
+
+                {/* 底部历史对话卡片 - 横向滑动 */}
+                {sessions.length > 0 && (
+                  <div className="w-full max-w-5xl">
+                    <div className="relative">
+                      {/* 左侧渐变遮罩 */}
+                      <div className="absolute left-0 top-0 bottom-0 w-8 bg-gradient-to-r from-[hsl(var(--background))] to-transparent z-10 pointer-events-none" />
+                      {/* 右侧渐变遮罩 */}
+                      <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-[hsl(var(--background))] to-transparent z-10 pointer-events-none" />
+                      
+                      {/* 横向滚动容器 */}
+                      <div className="flex gap-4 overflow-x-auto pb-4 px-2 scrollbar-hide" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
+                        {sessions.map((session) => (
+                          <HistoryCard
+                            key={session.id}
+                            session={session}
+                            onSelect={() => {
+                              if (!isStreaming) {
+                                setStreamingContent("")
+                                setActiveSessionId(session.id)
+                              }
+                            }}
+                            onDelete={(e) => handleDeleteSession(session.id, e)}
+                            isStreaming={isStreaming}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
-            ) : (
-              // Messages
+              
+              {errorMessage && (
+                <div className="w-full max-w-3xl mt-6">
+                  <div className="flex items-start gap-2 rounded-2xl border border-[hsl(var(--destructive))]/40 bg-[hsl(var(--destructive))]/5 px-4 py-3 text-sm text-[hsl(var(--destructive))]">
+                    <AlertTriangle className="h-4 w-4 mt-0.5" strokeWidth={1.5} />
+                    <span className="leading-relaxed">{errorMessage}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            // Messages - 对话页
+            <div className="max-w-3xl mx-auto px-6 py-6">
               <div className="space-y-6">
-                {/* Agent 工作流程状态展示 - 始终在最上方 */}
+                {/* Agent 工作流程状态展示 */}
                 {mode === "agent" && stages.length > 0 && (
                   <WorkflowStatus 
                     stages={stages}
@@ -1073,7 +1104,7 @@ export function AgentPage() {
                   />
                 )}
                 
-                {/* 用户确认对话框 - 内联在画布底部 */}
+                {/* 用户确认对话框 */}
                 {confirmationDialog && (
                   <ConfirmationDialog 
                     message={confirmationDialog.message}
@@ -1085,144 +1116,140 @@ export function AgentPage() {
                 
                 <div ref={messagesEndRef} />
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
-        {/* Input Area */}
-        <div className="px-6 pb-6">
-          <div className="max-w-3xl mx-auto">
-            <div className="rounded-3xl bg-[hsl(var(--secondary))] px-4 py-3 focus-within:ring-2 focus-within:ring-[hsl(var(--ring))] focus-within:bg-[hsl(var(--card))] transition-all duration-200">
-              <textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault()
-                    handleSend()
-                  }
-                }}
-                placeholder="输入研究方向或问题..."
-                className="w-full resize-none bg-transparent text-sm placeholder:text-[hsl(var(--muted-foreground))] focus:outline-none"
-                rows={1}
-                style={{ minHeight: '24px', maxHeight: '200px' }}
-                onInput={(e) => {
-                  const target = e.target as HTMLTextAreaElement
-                  target.style.height = '24px'
-                  target.style.height = Math.min(target.scrollHeight, 200) + 'px'
-                }}
-                disabled={isStreaming}
-              />
-              <div className="flex items-center justify-between mt-2 pt-2 border-t border-[hsl(var(--border))]/50">
-                <div className="flex items-center gap-2">
-                  <SelectChip
-                    value={mode}
-                    onChange={(v) => setMode(v as Mode)}
-                    options={[
-                      { value: "human-in-loop", label: "Human-in-loop" },
-                      { value: "agent", label: "Agent 自动" },
-                    ]}
-                    disabled={isStreaming}
-                  />
-                  <SelectChip
-                    value={provider}
-                    onChange={(v) => setProvider(v as Provider)}
-                    options={[
-                      { value: "ark", label: "DeepSeek" },
-                      { value: "openai", label: "GPT-4" },
-                      { value: "anthropic", label: "Claude" },
-                      { value: "google", label: "Gemini" },
-                    ]}
-                    disabled={isStreaming}
-                  />
+        {/* Input Area - 仅在对话页显示 */}
+        {!isWelcomePage && (
+          <div className="px-6 pb-6">
+            <div className="max-w-3xl mx-auto">
+              <div className="rounded-3xl bg-[hsl(var(--secondary))] px-4 py-3 focus-within:ring-2 focus-within:ring-[hsl(var(--ring))] focus-within:bg-[hsl(var(--card))] transition-all duration-200">
+                <textarea
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault()
+                      handleSend()
+                    }
+                  }}
+                  placeholder="继续提问..."
+                  className="w-full resize-none bg-transparent text-sm placeholder:text-[hsl(var(--muted-foreground))] focus:outline-none text-[hsl(var(--foreground))]"
+                  rows={1}
+                  style={{ minHeight: '24px', maxHeight: '200px' }}
+                  onInput={(e) => {
+                    const target = e.target as HTMLTextAreaElement
+                    target.style.height = '24px'
+                    target.style.height = Math.min(target.scrollHeight, 200) + 'px'
+                  }}
+                  disabled={isStreaming}
+                />
+                <div className="flex items-center justify-between mt-2 pt-2 border-t border-[hsl(var(--border))]/50">
+                  <div className="flex items-center gap-3">
+                    <ModelSelector
+                      value={provider}
+                      onChange={(v) => setProvider(v as Provider)}
+                      disabled={isStreaming}
+                    />
+                    <ModeSelector
+                      value={mode}
+                      onChange={(v) => setMode(v as Mode)}
+                      disabled={isStreaming}
+                    />
+                  </div>
+                  <button
+                    onClick={handleSend}
+                    className={cn(
+                      "flex h-9 w-9 items-center justify-center rounded-full transition-all duration-200",
+                      input.trim() && !isStreaming
+                        ? "bg-[hsl(var(--foreground))] text-[hsl(var(--background))] hover:opacity-80 active:scale-95"
+                        : "bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] cursor-not-allowed"
+                    )}
+                    disabled={!input.trim() || isStreaming}
+                  >
+                    {isStreaming ? (
+                      <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} />
+                    ) : (
+                      <Send className="h-4 w-4" strokeWidth={2} />
+                    )}
+                  </button>
                 </div>
-                <button
-                  onClick={handleSend}
-                  className={cn(
-                    "flex h-9 w-9 items-center justify-center rounded-full transition-all duration-200",
-                    input.trim() && !isStreaming
-                      ? "bg-[hsl(var(--foreground))] text-[hsl(var(--background))] hover:opacity-80 active:scale-95"
-                      : "bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] cursor-not-allowed"
-                  )}
-                  disabled={!input.trim() || isStreaming}
-                >
-                  {isStreaming ? (
-                    <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} />
-                  ) : (
-                    <Send className="h-4 w-4" strokeWidth={2} />
-                  )}
-                </button>
               </div>
+              {errorMessage && (
+                <div className="mt-3 flex items-start gap-2 rounded-2xl border border-[hsl(var(--destructive))]/40 bg-[hsl(var(--destructive))]/5 px-3 py-2 text-sm text-[hsl(var(--destructive))]">
+                  <AlertTriangle className="h-4 w-4 mt-0.5" strokeWidth={1.5} />
+                  <span className="leading-relaxed">{errorMessage}</span>
+                </div>
+              )}
             </div>
-            {errorMessage && (
-              <div className="mt-3 flex items-start gap-2 rounded-2xl border border-[hsl(var(--destructive))]/40 bg-[hsl(var(--destructive))]/5 px-3 py-2 text-sm text-[hsl(var(--destructive))]">
-                <AlertTriangle className="h-4 w-4 mt-0.5" strokeWidth={1.5} />
-                <span className="leading-relaxed">{errorMessage}</span>
-              </div>
-            )}
           </div>
-        </div>
+        )}
       </div>
 
-      {/* Assets Panel */}
-      <aside className={cn(
-        "flex flex-col bg-[hsl(var(--card))] border-l border-[hsl(var(--border))] transition-all duration-300",
-        isAssetPanelOpen ? "w-64" : "w-0 overflow-hidden border-l-0"
-      )}>
-        <div className="p-3 flex items-center justify-between border-b border-[hsl(var(--border))]">
-          <span className="font-medium text-sm text-[hsl(var(--foreground))]">临时资产</span>
-          <button 
-            onClick={() => setIsAssetPanelOpen(false)}
-            className="p-2 rounded-lg hover:bg-[hsl(var(--secondary))] transition-material"
-          >
-            <PanelRightClose className="h-5 w-5 text-[hsl(var(--muted-foreground))]" strokeWidth={1.5} />
-          </button>
-        </div>
-        <div className="flex-1 overflow-auto p-2">
-          <AssetSection 
-            icon={ListTree} 
-            label="章节框架" 
-            count={assetCounts.chapter_framework} 
-            assets={tempAssets.filter(a => a.type === "chapter_framework")}
-            onViewAsset={setSelectedAsset}
-            defaultOpen 
-          />
-          <AssetSection 
-            icon={BookOpen} 
-            label="候选文献" 
-            count={assetCounts.candidate_literature}
-            assets={tempAssets.filter(a => a.type === "candidate_literature")}
-            onViewAsset={setSelectedAsset}
-          />
-          <AssetSection 
-            icon={FileText} 
-            label="检索式版本" 
-            count={assetCounts.search_query}
-            assets={tempAssets.filter(a => a.type === "search_query")}
-            onViewAsset={setSelectedAsset}
-          />
-          <AssetSection 
-            icon={FileText} 
-            label="综述草稿" 
-            count={assetCounts.draft}
-            assets={tempAssets.filter(a => a.type === "draft")}
-            onViewAsset={setSelectedAsset}
-          />
-        </div>
-        <div className="p-4 border-t border-[hsl(var(--border))]">
-          <button 
-            onClick={handleSyncToProject}
-            className="w-full h-10 rounded-full bg-[hsl(var(--primary))] text-white text-sm font-medium transition-material hover:shadow-md active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
-            disabled={tempAssets.length === 0 || isSyncing}
-          >
-            {isSyncing ? "同步中..." : "同步到项目"}
-          </button>
-        </div>
-      </aside>
+      {/* Assets Panel - 仅在对话页显示，使用 flex 布局挤压主区域 */}
+      {!isWelcomePage && (
+        <aside className={cn(
+          "flex flex-col bg-[hsl(var(--card))] border-l border-[hsl(var(--border))] transition-all duration-300 ease-out overflow-hidden",
+          isAssetPanelOpen ? "w-64" : "w-0 border-l-0"
+        )}>
+          <div className="w-64 h-full flex flex-col">
+            <div className="p-3 flex items-center justify-between border-b border-[hsl(var(--border))]">
+              <span className="font-medium text-sm text-[hsl(var(--foreground))]">临时资产</span>
+              <button 
+                onClick={() => setIsAssetPanelOpen(false)}
+                className="p-2 rounded-lg hover:bg-[hsl(var(--secondary))] transition-material"
+              >
+                <PanelRightClose className="h-5 w-5 text-[hsl(var(--muted-foreground))]" strokeWidth={1.5} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto p-2">
+              <AssetSection 
+                icon={ListTree} 
+                label="章节框架" 
+                count={assetCounts.chapter_framework} 
+                assets={tempAssets.filter(a => a.type === "chapter_framework")}
+                onViewAsset={setSelectedAsset}
+                defaultOpen 
+              />
+              <AssetSection 
+                icon={BookOpen} 
+                label="候选文献" 
+                count={assetCounts.candidate_literature}
+                assets={tempAssets.filter(a => a.type === "candidate_literature")}
+                onViewAsset={setSelectedAsset}
+              />
+              <AssetSection 
+                icon={FileText} 
+                label="检索式版本" 
+                count={assetCounts.search_query}
+                assets={tempAssets.filter(a => a.type === "search_query")}
+                onViewAsset={setSelectedAsset}
+              />
+              <AssetSection 
+                icon={FileText} 
+                label="综述草稿" 
+                count={assetCounts.draft}
+                assets={tempAssets.filter(a => a.type === "draft")}
+                onViewAsset={setSelectedAsset}
+              />
+            </div>
+            <div className="p-4 border-t border-[hsl(var(--border))]">
+              <button 
+                onClick={handleSyncToProject}
+                className="w-full h-10 rounded-full bg-[hsl(var(--primary))] text-white text-sm font-medium transition-material hover:shadow-md active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={tempAssets.length === 0 || isSyncing}
+              >
+                {isSyncing ? "同步中..." : "同步到项目"}
+              </button>
+            </div>
+          </div>
+        </aside>
+      )}
       
-      {/* Asset Detail Modal */}
+      {/* Asset Detail Panel - 侧边弹窗，进一步挤压主区域 */}
       {selectedAsset && (
-        <AssetDetailModal asset={selectedAsset} onClose={() => setSelectedAsset(null)} />
+        <AssetDetailPanel asset={selectedAsset} onClose={() => setSelectedAsset(null)} />
       )}
       
       {/* Resume Workflow Dialog */}
@@ -1410,7 +1437,7 @@ function MessageBubble({ message, isStreaming }: { message: AgentMessage; isStre
         <Sparkles className="h-3.5 w-3.5 text-white" strokeWidth={2} />
       </div>
       <div className="flex-1 min-w-0">
-        <div className="prose prose-sm dark:prose-invert max-w-none text-[hsl(var(--foreground))] prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-pre:my-2 prose-code:text-[hsl(var(--primary))] prose-code:bg-[hsl(var(--secondary))] prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-pre:bg-[hsl(var(--secondary))] prose-pre:border prose-pre:border-[hsl(var(--border))]">
+        <div className="prose prose-sm dark:prose-invert max-w-none text-[hsl(var(--foreground))] prose-p:my-2 prose-headings:my-3 prose-headings:font-semibold prose-h1:text-xl prose-h2:text-lg prose-h3:text-base prose-h4:text-sm prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-pre:my-2 prose-code:text-[hsl(var(--primary))] prose-code:bg-[hsl(var(--secondary))] prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-pre:bg-[hsl(var(--secondary))] prose-pre:border prose-pre:border-[hsl(var(--border))] prose-strong:text-[hsl(var(--foreground))] prose-strong:font-semibold">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>
             {message.content}
           </ReactMarkdown>
@@ -1420,19 +1447,240 @@ function MessageBubble({ message, isStreaming }: { message: AgentMessage; isStre
   )
 }
 
-function SuggestionChip({ icon: Icon, label, onClick }: { 
-  icon: React.ElementType
-  label: string
-  onClick?: () => void
+// 历史对话卡片 - 横向滑动样式
+function HistoryCard({ 
+  session,
+  onSelect,
+  onDelete,
+  isStreaming,
+}: { 
+  session: AgentSession
+  onSelect: () => void
+  onDelete: (e: React.MouseEvent) => void
+  isStreaming: boolean
 }) {
+  const formatTime = (dateStr: string) => {
+    const date = new Date(dateStr)
+    const now = new Date()
+    const diffMs = now.getTime() - date.getTime()
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+    
+    if (diffDays === 0) {
+      return `今天 ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`
+    } else if (diffDays === 1) {
+      return '昨天'
+    } else if (diffDays < 7) {
+      return `${diffDays} 天前`
+    } else {
+      return `${date.getMonth() + 1}月${date.getDate()}日`
+    }
+  }
+  
   return (
-    <button 
-      onClick={onClick}
-      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl border border-[hsl(var(--border))] bg-transparent text-sm text-[hsl(var(--foreground))] hover:bg-[hsl(var(--secondary))] transition-all duration-200"
+    <button
+      onClick={onSelect}
+      disabled={isStreaming}
+      className={cn(
+        "group relative flex-shrink-0 w-[280px] text-left p-5 rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] hover:bg-[hsl(var(--secondary))] hover:border-[hsl(var(--primary))]/30 transition-all duration-200 min-h-[160px] flex flex-col",
+        isStreaming && "opacity-50 cursor-not-allowed"
+      )}
     >
-      <Icon className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />
-      <span className="max-w-[240px] truncate">{label}</span>
+      {/* 删除按钮 */}
+      <button
+        onClick={onDelete}
+        className="absolute top-3 right-3 p-1.5 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-[hsl(var(--destructive))]/10 transition-all"
+      >
+        <Trash2 className="h-4 w-4 text-[hsl(var(--muted-foreground))] group-hover:text-[hsl(var(--destructive))]" strokeWidth={1.5} />
+      </button>
+      
+      {/* 图标 */}
+      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[hsl(var(--primary))]/10 mb-4">
+        <MessageSquare className="h-5 w-5 text-[hsl(var(--primary))]" strokeWidth={1.5} />
+      </div>
+      
+      {/* 标题 */}
+      <h3 className="text-sm font-medium text-[hsl(var(--foreground))] mb-3 line-clamp-2 flex-1 leading-relaxed">
+        {session.title || "新对话"}
+      </h3>
+      
+      {/* 时间和模式 */}
+      <div className="flex items-center gap-2 text-xs text-[hsl(var(--muted-foreground))]">
+        <span>{formatTime(session.created_at)}</span>
+        <span className="w-1 h-1 rounded-full bg-[hsl(var(--muted-foreground))]/50" />
+        <span className={cn(
+          "px-1.5 py-0.5 rounded text-[10px] font-medium",
+          session.mode === 'agent' 
+            ? "bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]"
+            : "bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]"
+        )}>
+          {session.mode === 'agent' ? 'Agent' : 'Human'}
+        </span>
+      </div>
     </button>
+  )
+}
+
+// 模型选择器 - 更美观的下拉样式
+function ModelSelector({ value, onChange, disabled }: { 
+  value: string
+  onChange: (value: string) => void
+  disabled?: boolean
+}) {
+  const [isOpen, setIsOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  
+  const models = [
+    { value: "ark", label: "DeepSeek", icon: "DS" },
+    { value: "openai", label: "GPT-4", icon: "GP" },
+    { value: "anthropic", label: "Claude", icon: "CL" },
+    { value: "google", label: "Gemini", icon: "GE" },
+  ]
+  
+  const current = models.find(m => m.value === value) || models[0]
+  
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setIsOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+  
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => !disabled && setIsOpen(!isOpen)}
+        disabled={disabled}
+        className={cn(
+          "flex items-center gap-2 h-9 px-3 rounded-full bg-[hsl(var(--secondary))] hover:bg-[hsl(var(--accent))] transition-all duration-200",
+          disabled && "opacity-50 cursor-not-allowed"
+        )}
+      >
+        <div className="flex h-5 w-5 items-center justify-center rounded bg-[hsl(var(--primary))]/10 text-[10px] font-bold text-[hsl(var(--primary))]">
+          {current.icon}
+        </div>
+        <span className="text-sm font-medium text-[hsl(var(--foreground))]">{current.label}</span>
+        <ChevronDown className={cn(
+          "h-4 w-4 text-[hsl(var(--muted-foreground))] transition-transform duration-200",
+          isOpen && "rotate-180"
+        )} strokeWidth={1.5} />
+      </button>
+      
+      {isOpen && (
+        <div className="absolute bottom-full left-0 mb-2 w-40 rounded-xl bg-[hsl(var(--card))] border border-[hsl(var(--border))] shadow-lg overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
+          {models.map((model) => (
+            <button
+              key={model.value}
+              onClick={() => {
+                onChange(model.value)
+                setIsOpen(false)
+              }}
+              className={cn(
+                "w-full flex items-center gap-2 px-3 py-2.5 text-sm transition-colors",
+                model.value === value 
+                  ? "bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]" 
+                  : "text-[hsl(var(--foreground))] hover:bg-[hsl(var(--secondary))]"
+              )}
+            >
+              <div className={cn(
+                "flex h-5 w-5 items-center justify-center rounded text-[10px] font-bold",
+                model.value === value 
+                  ? "bg-[hsl(var(--primary))]/20 text-[hsl(var(--primary))]"
+                  : "bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]"
+              )}>
+                {model.icon}
+              </div>
+              <span className="font-medium">{model.label}</span>
+              {model.value === value && (
+                <Check className="h-4 w-4 ml-auto" strokeWidth={2} />
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// 模式选择器
+function ModeSelector({ value, onChange, disabled }: { 
+  value: string
+  onChange: (value: string) => void
+  disabled?: boolean
+}) {
+  const [isOpen, setIsOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  
+  const modes = [
+    { value: "agent", label: "Agent 模式", desc: "全自动执行" },
+    { value: "human-in-loop", label: "Human 模式", desc: "逐步确认" },
+  ]
+  
+  const current = modes.find(m => m.value === value) || modes[0]
+  
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setIsOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+  
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => !disabled && setIsOpen(!isOpen)}
+        disabled={disabled}
+        className={cn(
+          "flex items-center gap-2 h-9 px-3 rounded-full bg-[hsl(var(--secondary))] hover:bg-[hsl(var(--accent))] transition-all duration-200",
+          disabled && "opacity-50 cursor-not-allowed"
+        )}
+      >
+        <Sparkles className="h-4 w-4 text-[hsl(var(--primary))]" strokeWidth={1.5} />
+        <span className="text-sm font-medium text-[hsl(var(--foreground))]">{current.label}</span>
+        <ChevronDown className={cn(
+          "h-4 w-4 text-[hsl(var(--muted-foreground))] transition-transform duration-200",
+          isOpen && "rotate-180"
+        )} strokeWidth={1.5} />
+      </button>
+      
+      {isOpen && (
+        <div className="absolute bottom-full left-0 mb-2 w-48 rounded-xl bg-[hsl(var(--card))] border border-[hsl(var(--border))] shadow-lg overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
+          {modes.map((mode) => (
+            <button
+              key={mode.value}
+              onClick={() => {
+                onChange(mode.value)
+                setIsOpen(false)
+              }}
+              className={cn(
+                "w-full flex flex-col items-start px-3 py-2.5 text-left transition-colors",
+                mode.value === value 
+                  ? "bg-[hsl(var(--primary))]/10" 
+                  : "hover:bg-[hsl(var(--secondary))]"
+              )}
+            >
+              <div className="flex items-center gap-2 w-full">
+                <span className={cn(
+                  "text-sm font-medium",
+                  mode.value === value ? "text-[hsl(var(--primary))]" : "text-[hsl(var(--foreground))]"
+                )}>
+                  {mode.label}
+                </span>
+                {mode.value === value && (
+                  <Check className="h-4 w-4 ml-auto text-[hsl(var(--primary))]" strokeWidth={2} />
+                )}
+              </div>
+              <span className="text-xs text-[hsl(var(--muted-foreground))]">{mode.desc}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -1503,41 +1751,39 @@ function AssetSection({ icon: Icon, label, count, assets, onViewAsset, defaultOp
   )
 }
 
-function AssetDetailModal({ asset, onClose }: { asset: TempAsset; onClose: () => void }) {
+// 资产详情侧边面板 - 挤压主区域
+function AssetDetailPanel({ asset, onClose }: { asset: TempAsset; onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div 
-        className="bg-[hsl(var(--card))] rounded-2xl shadow-xl max-w-2xl w-full max-h-[80vh] flex flex-col m-4"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-[hsl(var(--border))]">
-          <h3 className="font-medium text-[hsl(var(--foreground))]">{asset.title || "资产详情"}</h3>
-          <button 
-            onClick={onClose}
-            className="p-1.5 rounded-lg hover:bg-[hsl(var(--secondary))] transition-material"
-          >
-            <X className="h-4 w-4 text-[hsl(var(--muted-foreground))]" strokeWidth={1.5} />
-          </button>
-        </div>
-        <div className="flex-1 overflow-auto p-4">
-          <div className="mb-3 flex items-center gap-2 text-xs text-[hsl(var(--muted-foreground))]">
-            <span className="px-2 py-0.5 rounded bg-[hsl(var(--secondary))]">{asset.type}</span>
-            <span>{new Date(asset.created_at).toLocaleString()}</span>
-          </div>
-          <div className="prose prose-sm dark:prose-invert max-w-none text-[hsl(var(--foreground))] whitespace-pre-wrap font-mono text-xs bg-[hsl(var(--secondary))] rounded-lg p-4 overflow-auto max-h-[50vh]">
-            {asset.content || "(无内容)"}
-          </div>
-          {asset.data && Object.keys(asset.data).length > 0 && (
-            <div className="mt-4">
-              <h4 className="text-sm font-medium text-[hsl(var(--foreground))] mb-2">元数据</h4>
-              <pre className="text-xs bg-[hsl(var(--secondary))] rounded-lg p-3 overflow-auto">
-                {JSON.stringify(asset.data, null, 2)}
-              </pre>
-            </div>
-          )}
-        </div>
+    <aside className="w-96 flex flex-col bg-[hsl(var(--card))] border-l border-[hsl(var(--border))] animate-in slide-in-from-right duration-200">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-[hsl(var(--border))]">
+        <h3 className="font-medium text-[hsl(var(--foreground))] truncate flex-1 mr-2">{asset.title || "资产详情"}</h3>
+        <button 
+          onClick={onClose}
+          className="p-1.5 rounded-lg hover:bg-[hsl(var(--secondary))] transition-material flex-shrink-0"
+        >
+          <X className="h-4 w-4 text-[hsl(var(--muted-foreground))]" strokeWidth={1.5} />
+        </button>
       </div>
-    </div>
+      <div className="flex-1 overflow-auto p-4">
+        <div className="mb-3 flex items-center gap-2 text-xs text-[hsl(var(--muted-foreground))]">
+          <span className="px-2 py-0.5 rounded bg-[hsl(var(--secondary))]">{asset.type}</span>
+          <span>{new Date(asset.created_at).toLocaleString()}</span>
+        </div>
+        <div className="prose prose-sm dark:prose-invert max-w-none">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {asset.content || "(无内容)"}
+          </ReactMarkdown>
+        </div>
+        {asset.data && Object.keys(asset.data).length > 0 && (
+          <div className="mt-4">
+            <h4 className="text-sm font-medium text-[hsl(var(--foreground))] mb-2">元数据</h4>
+            <pre className="text-xs bg-[hsl(var(--secondary))] rounded-lg p-3 overflow-auto">
+              {JSON.stringify(asset.data, null, 2)}
+            </pre>
+          </div>
+        )}
+      </div>
+    </aside>
   )
 }
 
