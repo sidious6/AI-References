@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import { 
-  ChevronDown, ChevronRight, Send, Loader2, Sparkles, 
+  ChevronDown, ChevronRight, ChevronLeft, Send, Loader2, Sparkles, 
   FileText, BookOpen, ListTree, PanelRightClose, PanelRightOpen,
   Plus, MessageSquare, Trash2, AlertTriangle, Check, Circle, X, Eye,
   RotateCcw
@@ -990,7 +990,7 @@ export function AgentPage() {
                       }}
                       disabled={isStreaming}
                     />
-                    <div className="flex items-center justify-between mt-4 pt-4 border-t border-[hsl(var(--border))]/30">
+                    <div className="flex items-center justify-between mt-4">
                       <div className="flex items-center gap-3">
                         <ModelSelector
                           value={provider}
@@ -1026,30 +1026,17 @@ export function AgentPage() {
                 {/* 底部历史对话卡片 - 横向滑动 */}
                 {sessions.length > 0 && (
                   <div className="w-full max-w-5xl">
-                    <div className="relative">
-                      {/* 左侧渐变遮罩 */}
-                      <div className="absolute left-0 top-0 bottom-0 w-8 bg-gradient-to-r from-[hsl(var(--background))] to-transparent z-10 pointer-events-none" />
-                      {/* 右侧渐变遮罩 */}
-                      <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-[hsl(var(--background))] to-transparent z-10 pointer-events-none" />
-                      
-                      {/* 横向滚动容器 */}
-                      <div className="flex gap-4 overflow-x-auto pb-4 px-2 scrollbar-hide" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
-                        {sessions.map((session) => (
-                          <HistoryCard
-                            key={session.id}
-                            session={session}
-                            onSelect={() => {
-                              if (!isStreaming) {
-                                setStreamingContent("")
-                                setActiveSessionId(session.id)
-                              }
-                            }}
-                            onDelete={(e) => handleDeleteSession(session.id, e)}
-                            isStreaming={isStreaming}
-                          />
-                        ))}
-                      </div>
-                    </div>
+                    <HistoryCardsSlider
+                      sessions={sessions}
+                      onSelect={(session) => {
+                        if (!isStreaming) {
+                          setStreamingContent("")
+                          setActiveSessionId(session.id)
+                        }
+                      }}
+                      onDelete={(sessionId, e) => handleDeleteSession(sessionId, e)}
+                      isStreaming={isStreaming}
+                    />
                   </div>
                 )}
               </div>
@@ -1443,6 +1430,110 @@ function MessageBubble({ message, isStreaming }: { message: AgentMessage; isStre
           </ReactMarkdown>
         </div>
       </div>
+    </div>
+  )
+}
+
+// 历史对话卡片滑动容器
+function HistoryCardsSlider({
+  sessions,
+  onSelect,
+  onDelete,
+  isStreaming,
+}: {
+  sessions: AgentSession[]
+  onSelect: (session: AgentSession) => void
+  onDelete: (sessionId: string, e: React.MouseEvent) => void
+  isStreaming: boolean
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [showLeftArrow, setShowLeftArrow] = useState(false)
+  const [showRightArrow, setShowRightArrow] = useState(false)
+
+  const checkScrollPosition = useCallback(() => {
+    if (scrollRef.current) {
+      const { scrollLeft, scrollWidth, clientWidth } = scrollRef.current
+      setShowLeftArrow(scrollLeft > 10)
+      setShowRightArrow(scrollLeft < scrollWidth - clientWidth - 10)
+    }
+  }, [])
+
+  useEffect(() => {
+    checkScrollPosition()
+    const scrollEl = scrollRef.current
+    if (scrollEl) {
+      scrollEl.addEventListener('scroll', checkScrollPosition)
+      window.addEventListener('resize', checkScrollPosition)
+    }
+    return () => {
+      if (scrollEl) {
+        scrollEl.removeEventListener('scroll', checkScrollPosition)
+      }
+      window.removeEventListener('resize', checkScrollPosition)
+    }
+  }, [checkScrollPosition, sessions])
+
+  const scroll = (direction: 'left' | 'right') => {
+    if (scrollRef.current) {
+      const scrollAmount = 300
+      scrollRef.current.scrollBy({
+        left: direction === 'left' ? -scrollAmount : scrollAmount,
+        behavior: 'smooth'
+      })
+    }
+  }
+
+  return (
+    <div className="flex items-center">
+      {/* 左侧箭头 */}
+      <button
+        onClick={() => scroll('left')}
+        className={cn(
+          "flex-shrink-0 p-2 mr-2 hover:bg-[hsl(var(--secondary))] rounded-full transition-all duration-200",
+          showLeftArrow ? "opacity-100" : "opacity-0 pointer-events-none"
+        )}
+      >
+        <ChevronLeft className="h-5 w-5 text-[hsl(var(--foreground))]" strokeWidth={2} />
+      </button>
+
+      {/* 卡片滚动区域 */}
+      <div className="flex-1 min-w-0 relative">
+        {/* 右侧渐变遮罩 */}
+        <div 
+          className={cn(
+            "absolute right-0 top-0 bottom-4 w-20 z-10 pointer-events-none transition-opacity duration-300",
+            "bg-gradient-to-l from-[hsl(var(--background))] to-transparent",
+            showRightArrow ? "opacity-100" : "opacity-0"
+          )}
+        />
+        
+        <div 
+          ref={scrollRef}
+          className="flex gap-4 overflow-x-auto pb-4 scrollbar-hide" 
+          style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+        >
+          {sessions.map((session) => (
+            <HistoryCard
+              key={session.id}
+              session={session}
+              onSelect={() => onSelect(session)}
+              onDelete={(e) => onDelete(session.id, e)}
+              isStreaming={isStreaming}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* 右侧箭头 */}
+      <button
+        onClick={() => scroll('right')}
+        className={cn(
+          "flex-shrink-0 p-2 ml-2 hover:bg-[hsl(var(--secondary))] rounded-full transition-all duration-200",
+          showRightArrow ? "opacity-100" : "opacity-0 pointer-events-none"
+        )}
+      >
+        <ChevronRight className="h-5 w-5 text-[hsl(var(--foreground))]" strokeWidth={2} />
+      </button>
     </div>
   )
 }

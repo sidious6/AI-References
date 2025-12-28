@@ -3,7 +3,12 @@ import { MainLayout } from "./components/layout/MainLayout"
 import { ProjectPage } from "./pages/Project"
 import { ProjectDetailPage } from "./pages/Project/detail"
 import { AgentPage } from "./pages/Agent"
-import { SettingsPage } from "./pages/Settings"
+import { 
+  ModelSettingsPage, 
+  DataSourceSettingsPage, 
+  EnvironmentSettingsPage, 
+  LogsSettingsPage 
+} from "./pages/Settings"
 import { AuthPage } from "./pages/Auth"
 import { useAuthStore } from "./stores/auth.store"
 
@@ -45,7 +50,10 @@ export const router = createBrowserRouter([
           { path: "project", element: <ProjectPage /> },
           { path: "project/:id", element: <ProjectDetailPage /> },
           { path: "agent", element: <AgentPage /> },
-          { path: "settings", element: <SettingsPage /> },
+          { path: "settings/model", element: <ModelSettingsPage /> },
+          { path: "settings/datasource", element: <DataSourceSettingsPage /> },
+          { path: "settings/environment", element: <EnvironmentSettingsPage /> },
+          { path: "settings/logs", element: <LogsSettingsPage /> },
         ],
       },
     ],

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react"
-import { NavLink, useNavigate } from "react-router-dom"
+import { NavLink, useNavigate, useLocation } from "react-router-dom"
 import {
   Home,
   FolderKanban,
@@ -11,10 +11,18 @@ import {
   LogOut,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   FileText,
   BookOpen,
   PanelLeftClose,
   PanelLeft,
+  Palette,
+  Database,
+  Server,
+  Key,
+  Sun,
+  Moon,
+  Monitor,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
@@ -26,6 +34,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { useAuthStore } from "@/stores/auth.store"
 import { useSidebarStore } from "@/stores/sidebar.store"
+import { useThemeStore } from "@/stores/theme.store"
 
 type SubView = 'main' | 'project'
 
@@ -323,32 +332,138 @@ function SubNavItem({
   )
 }
 
+// 设置菜单项配置
+const settingsMenuItems = [
+  { id: "theme", icon: Palette, label: "主题", hasSubmenu: true },
+  { id: "model", icon: Server, label: "模型配置", path: "/settings/model" },
+  { id: "datasource", icon: Database, label: "数据源", path: "/settings/datasource" },
+  { id: "environment", icon: Key, label: "运行环境", path: "/settings/environment" },
+  { id: "logs", icon: FileText, label: "日志诊断", path: "/settings/logs" },
+]
+
 function BottomSection() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { user, logout } = useAuthStore()
+  const { theme, setTheme } = useThemeStore()
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [themeHover, setThemeHover] = useState(false)
+  const settingsRef = useRef<HTMLDivElement>(null)
+
+  // 点击外部关闭菜单
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (settingsRef.current && !settingsRef.current.contains(e.target as Node)) {
+        setSettingsOpen(false)
+      }
+    }
+    if (settingsOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [settingsOpen])
 
   const handleLogout = () => {
     logout()
     navigate('/auth')
   }
 
+  const handleThemeChange = (newTheme: 'light' | 'dark' | 'system') => {
+    setTheme(newTheme)
+  }
+
+  const handleSettingsItemClick = (item: typeof settingsMenuItems[0]) => {
+    if (item.path) {
+      navigate(item.path)
+      setSettingsOpen(false)
+    }
+  }
+
   return (
-    <div className="border-t border-[hsl(var(--border))] px-3 py-3 space-y-0.5">
-      {/* Settings */}
-      <NavLink
-        to="/settings"
-        className={({ isActive }) =>
-          cn(
-            "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors",
-            isActive
-              ? "bg-[hsl(var(--secondary))] text-[hsl(var(--foreground))]"
-              : "text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--secondary))] hover:text-[hsl(var(--foreground))]"
-          )
-        }
-      >
-        <Settings className="h-5 w-5" strokeWidth={1.5} />
-        <span className="text-sm">设置</span>
-      </NavLink>
+    <div className="px-3 py-3 space-y-0.5">
+      {/* Settings Menu */}
+      <div className="relative" ref={settingsRef}>
+        {/* Settings Popup */}
+        <div 
+          className={cn(
+            "absolute bottom-full left-0 right-0 mb-2 py-1 rounded-xl bg-[hsl(var(--card))] shadow-lg",
+            "transition-all duration-200 ease-out origin-bottom",
+            settingsOpen 
+              ? "opacity-100 scale-100 translate-y-0" 
+              : "opacity-0 scale-95 translate-y-2 pointer-events-none"
+          )}
+        >
+          {settingsMenuItems.map((item) => (
+            <div 
+              key={item.id} 
+              className="relative px-1.5"
+              onMouseEnter={() => item.hasSubmenu && setThemeHover(true)}
+              onMouseLeave={() => item.hasSubmenu && setThemeHover(false)}
+            >
+              <button
+                onClick={() => handleSettingsItemClick(item)}
+                className={cn(
+                  "w-full flex items-center justify-between px-3 py-2 rounded-lg transition-colors text-sm",
+                  location.pathname === item.path
+                    ? "text-[hsl(var(--primary))] bg-[hsl(var(--accent))]"
+                    : "text-[hsl(var(--foreground))] hover:bg-[hsl(var(--secondary))]"
+                )}
+              >
+                <div className="flex items-center gap-3">
+                  <item.icon className="h-4 w-4" strokeWidth={1.5} />
+                  <span>{item.label}</span>
+                </div>
+                {item.hasSubmenu && (
+                  <ChevronRight className="h-4 w-4 text-[hsl(var(--muted-foreground))]" strokeWidth={1.5} />
+                )}
+              </button>
+
+              {/* Theme Submenu - 右侧弹出 */}
+              {item.id === "theme" && (
+                <div 
+                  className={cn(
+                    "absolute left-full top-0 ml-1 py-1 min-w-[120px] rounded-xl bg-[hsl(var(--card))] shadow-lg",
+                    "transition-all duration-200 ease-out origin-left",
+                    themeHover 
+                      ? "opacity-100 scale-100 translate-x-0" 
+                      : "opacity-0 scale-95 -translate-x-2 pointer-events-none"
+                  )}
+                >
+                  {[
+                    { value: "light", icon: Sun, label: "浅色" },
+                    { value: "dark", icon: Moon, label: "深色" },
+                    { value: "system", icon: Monitor, label: "跟随系统" },
+                  ].map((themeOption) => (
+                    <div key={themeOption.value} className="px-1.5">
+                      <button
+                        onClick={() => handleThemeChange(themeOption.value as 'light' | 'dark' | 'system')}
+                        className={cn(
+                          "w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-colors text-sm",
+                          theme === themeOption.value
+                            ? "text-[hsl(var(--primary))] bg-[hsl(var(--accent))]"
+                            : "text-[hsl(var(--foreground))] hover:bg-[hsl(var(--secondary))]"
+                        )}
+                      >
+                        <themeOption.icon className="h-4 w-4" strokeWidth={1.5} />
+                        <span>{themeOption.label}</span>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Settings Button */}
+        <button
+          onClick={() => setSettingsOpen(!settingsOpen)}
+          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--secondary))] hover:text-[hsl(var(--foreground))]"
+        >
+          <Settings className="h-5 w-5" strokeWidth={1.5} />
+          <span className="text-sm">设置</span>
+        </button>
+      </div>
 
       {/* User */}
       <DropdownMenu>
