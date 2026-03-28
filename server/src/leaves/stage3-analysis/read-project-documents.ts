@@ -30,6 +30,7 @@ export async function readProjectDocuments({ ctx }: ToolInput): Promise<ToolResu
     return { id: doc.id, name: doc.name, type: doc.type, snippet: text };
   });
   
+  ctx.state.projectDocuments = result;
   ctx.state.logs.push(`读取 ${result.length} 个项目文档`);
   return { output: result };
 }

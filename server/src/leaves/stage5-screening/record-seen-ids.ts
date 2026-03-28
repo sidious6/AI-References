@@ -5,7 +5,7 @@
 import type { ToolInput, ToolResult } from '../types.js';
 
 export async function recordSeenIds({ ctx }: ToolInput): Promise<ToolResult> {
-  const records = (ctx.state as any).mergedRecords || [];
+  const records = ctx.state.mergedRecords || [];
   
   for (const r of records) {
     const key = (r.doi || r.title || '').toLowerCase();

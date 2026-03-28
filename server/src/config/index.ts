@@ -42,6 +42,8 @@ export const config = {
   },
 
   database: {
+    provider: (process.env.STORAGE_PROVIDER || 'supabase').toLowerCase(), // supabase | sqlite
+    sqlitePath: process.env.SQLITE_DB_PATH || 'app.db',
     supabaseUrl: process.env.SUPABASE_URL || '',
     supabaseAnonKey: process.env.SUPABASE_ANON_KEY || '',
     supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',

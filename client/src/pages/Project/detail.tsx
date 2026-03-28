@@ -40,11 +40,14 @@ export function ProjectDetailPage() {
   
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const fetchProject = async () => {
+  const fetchProject = async (silent = false) => {
     if (!id) return
-    setIsLoading(true)
-    setError(null)
+    if (!silent) {
+      setIsLoading(true)
+      setError(null)
+    }
     
     try {
       const res = await projectApi.getById(id)
@@ -56,7 +59,7 @@ export function ProjectDetailPage() {
     } catch (err) {
       setError("网络错误")
     } finally {
-      setIsLoading(false)
+      if (!silent) setIsLoading(false)
     }
   }
 
@@ -93,6 +96,28 @@ export function ProjectDetailPage() {
     if (activeTab === "literature") fetchLiterature()
     else if (activeTab === "documents") fetchDocuments()
     else if (activeTab === "structure") fetchChapters()
+  }, [project, activeTab, searchQuery])
+
+  // 页面可见性变化时自动刷新（用户从 Agent 页面切换回来时触发）
+  // 使用防抖避免 visibilitychange + focus 同时触发导致重复请求
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState !== 'visible' || !project) return
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
+      refreshTimerRef.current = setTimeout(() => {
+        if (activeTab === "literature") fetchLiterature()
+        else if (activeTab === "documents") fetchDocuments()
+        else if (activeTab === "structure") fetchChapters()
+        fetchProject(true)
+      }, 300)
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    window.addEventListener('focus', handleVisibility)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility)
+      window.removeEventListener('focus', handleVisibility)
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
+    }
   }, [project, activeTab, searchQuery])
 
   const handleDeleteLiterature = async (litId: string) => {
@@ -312,7 +337,8 @@ function LiteratureList({ items, onDelete, onUpdateStatus, formatDate }: {
   formatDate: (date: string) => string
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [groupBy, setGroupBy] = useState<"none" | "source" | "status">("none")
+  const [groupBy, setGroupBy] = useState<"none" | "source" | "database" | "status" | "year">("none")
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   
   const STATUS_COLORS = {
     approved: "bg-green-100 text-green-700",
@@ -334,6 +360,15 @@ function LiteratureList({ items, onDelete, onUpdateStatus, formatDate }: {
     )
   }
   
+  const DATABASE_LABELS: Record<string, string> = {
+    wos: "Web of Science",
+    scopus: "Scopus",
+    openalex: "OpenAlex",
+    crossref: "CrossRef",
+    core: "CORE",
+    google: "Google Scholar",
+  }
+
   // 按分组方式组织文献
   const getGroupedItems = () => {
     if (groupBy === "none") {
@@ -347,6 +382,21 @@ function LiteratureList({ items, onDelete, onUpdateStatus, formatDate }: {
         { key: "user", label: `用户导入 (${userItems.length})`, items: userItems },
       ].filter(g => g.items.length > 0)
     }
+    if (groupBy === "database") {
+      const grouped = new Map<string, Literature[]>()
+      items.forEach(item => {
+        const db = item.source_database || "unknown"
+        if (!grouped.has(db)) grouped.set(db, [])
+        grouped.get(db)!.push(item)
+      })
+      return Array.from(grouped.entries())
+        .sort((a, b) => b[1].length - a[1].length)
+        .map(([db, dbItems]) => ({
+          key: db,
+          label: `${DATABASE_LABELS[db] || db.toUpperCase()} (${dbItems.length})`,
+          items: dbItems,
+        }))
+    }
     if (groupBy === "status") {
       const approved = items.filter(i => i.status === "approved")
       const pending = items.filter(i => i.status === "pending")
@@ -356,6 +406,25 @@ function LiteratureList({ items, onDelete, onUpdateStatus, formatDate }: {
         { key: "pending", label: `待审核 (${pending.length})`, items: pending },
         { key: "rejected", label: `未通过 (${rejected.length})`, items: rejected },
       ].filter(g => g.items.length > 0)
+    }
+    if (groupBy === "year") {
+      const grouped = new Map<string, Literature[]>()
+      items.forEach(item => {
+        const yr = item.year ? String(item.year) : "未知年份"
+        if (!grouped.has(yr)) grouped.set(yr, [])
+        grouped.get(yr)!.push(item)
+      })
+      return Array.from(grouped.entries())
+        .sort((a, b) => {
+          if (a[0] === "未知年份") return 1
+          if (b[0] === "未知年份") return -1
+          return Number(b[0]) - Number(a[0])
+        })
+        .map(([yr, yrItems]) => ({
+          key: yr,
+          label: `${yr} (${yrItems.length})`,
+          items: yrItems,
+        }))
     }
     return [{ key: "all", label: null, items }]
   }
@@ -387,6 +456,11 @@ function LiteratureList({ items, onDelete, onUpdateStatus, formatDate }: {
             <span className="px-2 py-0.5 rounded-full bg-[hsl(var(--secondary))] text-xs text-[hsl(var(--muted-foreground))]">
               {item.source === "ai" ? "AI检索" : "用户导入"}
             </span>
+            {item.source_database && (
+              <span className="px-2 py-0.5 rounded-full bg-[hsl(var(--secondary))] text-xs text-[hsl(var(--muted-foreground))]">
+                {DATABASE_LABELS[item.source_database] || item.source_database.toUpperCase()}
+              </span>
+            )}
             {item.ai_relevance_score && (
               <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs">
                 相关度: {(item.ai_relevance_score * 100).toFixed(0)}%
@@ -542,25 +616,48 @@ function LiteratureList({ items, onDelete, onUpdateStatus, formatDate }: {
         <span className="text-sm text-[hsl(var(--muted-foreground))]">分组:</span>
         <select
           value={groupBy}
-          onChange={(e) => setGroupBy(e.target.value as "none" | "source" | "status")}
+          onChange={(e) => {
+            setGroupBy(e.target.value as typeof groupBy)
+            setCollapsedGroups(new Set())
+          }}
           className="h-8 px-3 rounded-lg border border-[hsl(var(--border))] bg-transparent text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
         >
           <option value="none">不分组</option>
-          <option value="source">按来源</option>
-          <option value="status">按状态</option>
+          <option value="source">按来源类型</option>
+          <option value="database">按数据库</option>
+          <option value="status">按审核状态</option>
+          <option value="year">按发表年份</option>
         </select>
+        <span className="text-xs text-[hsl(var(--muted-foreground))]">
+          共 {items.length} 篇
+        </span>
       </div>
 
       {groups.map(group => (
         <div key={group.key}>
           {group.label && (
-            <h3 className="text-sm font-medium text-[hsl(var(--muted-foreground))] mb-2 mt-4">
+            <button
+              onClick={() => {
+                setCollapsedGroups(prev => {
+                  const next = new Set(prev)
+                  next.has(group.key) ? next.delete(group.key) : next.add(group.key)
+                  return next
+                })
+              }}
+              className="flex items-center gap-2 text-sm font-medium text-[hsl(var(--muted-foreground))] mb-2 mt-4 hover:text-[hsl(var(--foreground))] transition-colors w-full text-left"
+            >
+              <ChevronRight className={cn(
+                "h-3.5 w-3.5 transition-transform",
+                !collapsedGroups.has(group.key) && "rotate-90"
+              )} />
               {group.label}
-            </h3>
+            </button>
           )}
-          <div className="space-y-2">
-            {group.items.map(item => renderItem(item))}
-          </div>
+          {!collapsedGroups.has(group.key) && (
+            <div className="space-y-2">
+              {group.items.map(item => renderItem(item))}
+            </div>
+          )}
         </div>
       ))}
     </div>

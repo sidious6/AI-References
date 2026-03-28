@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api';
+const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 
 // 获取存储的 token
 function getAuthToken(): string | null {
@@ -424,6 +424,7 @@ export interface ModelEndpoint {
   default_model: string;
   is_preset: boolean;
   enabled: boolean;
+  config_source?: 'env' | 'db' | 'none';
 }
 
 export interface ModelSettings {
@@ -542,6 +543,16 @@ export const authApi = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+
+  // 本地模式免密登录
+  localLogin: () =>
+    request<AuthResult>('/auth/local-login', {
+      method: 'POST',
+    }),
+
+  // 查询存储模式(无需认证)
+  getStorageMode: () =>
+    request<{ provider: string; allowLocalLogin: boolean }>('/auth/storage-mode'),
 
   getMe: () => request<AuthUser>('/auth/me'),
 

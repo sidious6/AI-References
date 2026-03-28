@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { 
   Server, 
   Database, 
@@ -13,7 +13,8 @@ import {
   AlertCircle,
   Save,
   Eye,
-  EyeOff
+  EyeOff,
+  Zap
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { settingsApi } from "@/services/api"
@@ -96,6 +97,7 @@ interface ModelEndpoint {
   default_model: string
   is_preset: boolean
   enabled: boolean
+  config_source?: 'env' | 'db' | 'none'
 }
 
 interface ModelSettingsData {
@@ -110,7 +112,15 @@ export function ModelSettingsPage() {
   const [newModel, setNewModel] = useState<Record<string, string>>({})
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
+  const [testingEndpoint, setTestingEndpoint] = useState<string | null>(null)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const messageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const showMessage = (msg: { type: 'success' | 'error'; text: string }, duration = 3000) => {
+    if (messageTimerRef.current) clearTimeout(messageTimerRef.current)
+    setMessage(msg)
+    messageTimerRef.current = setTimeout(() => setMessage(null), duration)
+  }
 
   useEffect(() => {
     loadSettings()
@@ -139,24 +149,38 @@ export function ModelSettingsPage() {
     })
     
     if (res.success) {
-      setMessage({ type: 'success', text: `${endpoint.name} 配置已保存` })
+      showMessage({ type: 'success', text: `${endpoint.name} 配置已保存` })
       setNewApiKey(prev => ({ ...prev, [endpoint.id]: '' }))
       setEditingEndpoint(null)
       await loadSettings()
     } else {
-      setMessage({ type: 'error', text: res.error || '保存失败' })
+      showMessage({ type: 'error', text: res.error || '保存失败' })
     }
     setIsSaving(false)
-    setTimeout(() => setMessage(null), 3000)
   }
 
   const handleSetDefault = async (endpointId: string) => {
     const res = await settingsApi.updateModel({ default_endpoint_id: endpointId })
     if (res.success) {
       setSettings(prev => prev ? { ...prev, default_endpoint_id: endpointId } : null)
-      setMessage({ type: 'success', text: '默认端点已更新' })
+      showMessage({ type: 'success', text: '默认端点已更新' })
     }
-    setTimeout(() => setMessage(null), 3000)
+  }
+
+  const handleTestLLM = async (endpointId: string) => {
+    setTestingEndpoint(endpointId)
+    setMessage(null)
+    try {
+      const res = await settingsApi.testLLM(endpointId)
+      if (res.success) {
+        showMessage({ type: 'success', text: res.data?.message || '连接测试成功' }, 5000)
+      } else {
+        showMessage({ type: 'error', text: res.error || '连接测试失败' }, 5000)
+      }
+    } catch {
+      showMessage({ type: 'error', text: '连接测试失败：网络错误' }, 5000)
+    }
+    setTestingEndpoint(null)
   }
 
   if (isLoading || !settings) {
@@ -203,7 +227,18 @@ export function ModelSettingsPage() {
                       )}
                     </div>
                     <p className="text-sm text-[hsl(var(--muted-foreground))]">
-                      {endpoint.api_key_masked ? `已配置 (${endpoint.api_key_masked})` : '未配置'}
+                      {endpoint.api_key_masked
+                        ? <>
+                            已配置 ({endpoint.api_key_masked})
+                            {endpoint.config_source === 'env' && (
+                              <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400">来自 .env</span>
+                            )}
+                            {endpoint.config_source === 'db' && (
+                              <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400">页面配置</span>
+                            )}
+                          </>
+                        : '未配置'
+                      }
                     </p>
                   </div>
                 </div>
@@ -255,6 +290,16 @@ export function ModelSettingsPage() {
                       {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                       保存
                     </button>
+                    {endpoint.api_key_masked && (
+                      <button
+                        onClick={() => handleTestLLM(endpoint.id)}
+                        disabled={testingEndpoint === endpoint.id}
+                        className="inline-flex items-center gap-2 h-9 px-4 rounded-full bg-[hsl(var(--secondary))] text-[hsl(var(--foreground))] text-sm font-medium hover:bg-[hsl(var(--accent))] transition-all disabled:opacity-50"
+                      >
+                        {testingEndpoint === endpoint.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+                        测试连接
+                      </button>
+                    )}
                   </div>
                 </div>
               )}

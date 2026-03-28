@@ -91,8 +91,8 @@ export async function webSearch({ ctx }: ToolInput): Promise<ToolResult> {
         ctx.state.logs.push('网络搜索 AI 分析完成');
         
         // 将分析结果存入上下文
-        (ctx.state as any).webSearchAnalysis = analysis;
-        (ctx.state as any).webSearchResults = allItems;
+        ctx.state.webSearchAnalysis = analysis;
+        ctx.state.webSearchResults = allItems;
         
         return { 
           output: {
@@ -103,7 +103,8 @@ export async function webSearch({ ctx }: ToolInput): Promise<ToolResult> {
       } catch (analysisErr: any) {
         console.error('[webSearch] AI 分析失败:', analysisErr.message);
         ctx.state.logs.push(`网络搜索 AI 分析失败: ${analysisErr.message}`);
-        // 即使分析失败，仍返回原始结果
+        // 分析失败仍保存原始搜索结果供下游使用
+        ctx.state.webSearchResults = allItems;
         return { output: allItems };
       }
     }

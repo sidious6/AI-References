@@ -3,13 +3,18 @@ import {
   ChevronDown, ChevronRight, ChevronLeft, Send, Loader2, Sparkles, 
   FileText, BookOpen, ListTree, PanelRightClose, PanelRightOpen,
   Plus, MessageSquare, Trash2, AlertTriangle, Check, Circle, X, Eye,
-  RotateCcw
+  RotateCcw, Copy, ClipboardCheck
 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { cn } from "@/lib/utils"
 import { agentApi, type AgentSession, type AgentMessage, type TempAsset, type WorkflowResumeInfo } from "@/services/api"
 import { useSidebarStore } from "@/stores/sidebar.store"
+import { TimelineMessage } from "@/components/agent/TimelineMessage"
+import { TaskProgressCard } from "@/components/agent/TaskProgressCard"
+import { ThinkingIndicator } from "@/components/agent/ThinkingIndicator"
+import { WorkflowTimeline } from "@/components/agent/WorkflowTimeline"
+import { ArtifactCard } from "@/components/agent/ArtifactCard"
 
 type Mode = "human-in-loop" | "agent"
 type Provider = "ark" | "openai" | "google" | "anthropic"
@@ -158,12 +163,17 @@ export function AgentPage() {
                 setIsStreaming(true)
                 setNeedsPolling(true)  // 标记需要轮询
               } else if (resumeResult.data.canResume) {
-                // 只有在工作流不活跃且可恢复时才弹出对话框
-                setNeedsPolling(false)
-                setResumeDialog({
-                  sessionId,
-                  resumeInfo: resumeResult.data,
-                })
+                // 检查前端已加载的 stages 是否全部完成，如果全部完成则不弹恢复对话框
+                const allDone = stages.length > 0 && stages.every(s => s.status === "completed" || s.status === "failed")
+                if (allDone) {
+                  setNeedsPolling(false)
+                } else {
+                  setNeedsPolling(false)
+                  setResumeDialog({
+                    sessionId,
+                    resumeInfo: resumeResult.data,
+                  })
+                }
               } else {
                 setNeedsPolling(false)
               }
@@ -560,37 +570,57 @@ export function AgentPage() {
           return updated
         })
       }
-    } else if (type === "user_confirmation_required") {
-      // 显示确认对话框
-      const { message, options, timeout } = statusData
-      console.log('[Agent] 收到确认请求:', message)
-      
-      setConfirmationDialog({
-        message,
-        options: options || [
-          { id: 'confirm', label: '确认', isDefault: true },
-          { id: 'cancel', label: '取消' },
-        ],
-        onConfirm: (optionId: string) => {
-          console.log('[Agent] 用户选择:', optionId)
-          // 清除超时
-          if (confirmationTimeoutRef.current) {
-            clearTimeout(confirmationTimeoutRef.current)
-            confirmationTimeoutRef.current = null
+    }
+  }
+
+  // SSE 流式处理辅助函数，消除 handleSend/handleResumeWorkflow 重复代码
+  const processSSEStream = async (
+    stream: AsyncIterable<{ type: string; content?: string; error?: string }>,
+    sessionId: string,
+    opts: { metadata?: Record<string, unknown>; errorPrefix?: string } = {},
+  ) => {
+    const { metadata = {}, errorPrefix = "请求失败" } = opts
+    let fullContent = ""
+    for await (const chunk of stream) {
+      if (chunk.type === "chunk") {
+        fullContent += chunk.content
+        setStreamingContent(fullContent)
+      } else if (chunk.type === "status") {
+        try {
+          const statusData = JSON.parse(chunk.content || "{}")
+          handleStatusEvent(statusData, sessionId)
+          if (statusData.type === "node_completed" && statusData.stage) {
+            const assetsResult = await agentApi.getTempAssets(sessionId)
+            if (assetsResult.success && assetsResult.data) {
+              setTempAssets(assetsResult.data)
+            }
           }
-          setConfirmationDialog(null)
-          // TODO: 发送用户选择到后端
-        },
-        timeout: timeout || 120000,
-      })
-      
-      // 设置超时自动选择默认选项
-      if (timeout) {
-        confirmationTimeoutRef.current = setTimeout(() => {
-          const defaultOption = options?.find((o: any) => o.isDefault)?.id || 'confirm'
-          console.log('[Agent] 确认超时，自动选择:', defaultOption)
-          setConfirmationDialog(null)
-        }, timeout)
+        } catch {
+          // 忽略解析错误
+        }
+      } else if (chunk.type === "done") {
+        const assistantTimestamp = new Date().toISOString()
+        const assistantMessage: AgentMessage = {
+          id: `assistant-${Date.now()}`,
+          session_id: sessionId,
+          role: "assistant",
+          content: fullContent,
+          tool_calls: null,
+          tool_call_id: null,
+          metadata,
+          tokens_used: null,
+          created_at: assistantTimestamp,
+          updated_at: assistantTimestamp,
+        }
+        setMessages(prev => [...prev, assistantMessage])
+        setStreamingContent("")
+        loadSessions()
+        const assetsResult = await agentApi.getTempAssets(sessionId)
+        if (assetsResult.success && assetsResult.data) {
+          setTempAssets(assetsResult.data)
+        }
+      } else if (chunk.type === "error") {
+        throw new Error(chunk.error || errorPrefix)
       }
     }
   }
@@ -653,60 +683,11 @@ export function AgentPage() {
     setStreamingContent("")
 
     try {
-      let fullContent = ""
-      for await (const chunk of agentApi.chatStream(sessionId, {
-        content,
-        provider,
-      })) {
-        if (chunk.type === "chunk") {
-          fullContent += chunk.content
-          setStreamingContent(fullContent)
-        } else if (chunk.type === "status") {
-          // 处理 Agent 工作流状态事件
-          try {
-            const statusData = JSON.parse(chunk.content || "{}")
-            handleStatusEvent(statusData, sessionId)
-            
-            // 每个阶段完成后刷新临时资产
-            if (statusData.type === "node_completed" && statusData.stage) {
-              const assetsResult = await agentApi.getTempAssets(sessionId)
-              if (assetsResult.success && assetsResult.data) {
-                setTempAssets(assetsResult.data)
-              }
-            }
-          } catch {
-            // 忽略解析错误
-          }
-        } else if (chunk.type === "done") {
-          // 添加助手消息
-          const assistantTimestamp = new Date().toISOString()
-          const assistantMessage: AgentMessage = {
-            id: `assistant-${Date.now()}`,
-            session_id: sessionId,
-            role: "assistant",
-            content: fullContent,
-            tool_calls: null,
-            tool_call_id: null,
-            metadata: {},
-            tokens_used: null,
-            created_at: assistantTimestamp,
-            updated_at: assistantTimestamp,
-          }
-          setMessages(prev => [...prev, assistantMessage])
-          setStreamingContent("")
-          
-          // 刷新会话列表以更新标题
-          loadSessions()
-          
-          // 刷新临时资产
-          const assetsResult = await agentApi.getTempAssets(sessionId)
-          if (assetsResult.success && assetsResult.data) {
-            setTempAssets(assetsResult.data)
-          }
-        } else if (chunk.type === "error") {
-          throw new Error(chunk.error || "对话失败，请稍后重试")
-        }
-      }
+      await processSSEStream(
+        agentApi.chatStream(sessionId, { content, provider }),
+        sessionId,
+        { errorPrefix: "对话失败，请稍后重试" },
+      )
     } catch (error) {
       setStreamingContent("")
       setErrorMessage(error instanceof Error ? error.message : "对话失败，请稍后重试")
@@ -721,18 +702,25 @@ export function AgentPage() {
     setInput(suggestion)
   }
 
-  // 切换阶段展开状态
-  const toggleStageExpand = (stage: number) => {
-    setExpandedStages(prev => {
-      const next = new Set(prev)
-      if (next.has(stage)) {
-        next.delete(stage)
-      } else {
-        next.add(stage)
-      }
-      return next
+  // 工具胶囊点击 - 根据 nodeId/title 匹配临时资产并打开详情
+  const handleToolPillClick = useCallback((nodeId: string, title: string) => {
+    if (tempAssets.length === 0) return
+    
+    // 尝试匹配：优先按 title 模糊匹配，再按最新创建时间
+    const titleLower = title.toLowerCase()
+    const matched = tempAssets.find(a => {
+      const assetTitle = (a.title || "").toLowerCase()
+      return assetTitle.includes(titleLower) || titleLower.includes(assetTitle)
     })
-  }
+    
+    if (matched) {
+      setSelectedAsset(matched)
+      setIsAssetPanelOpen(true)
+    } else {
+      // 没有精确匹配时，打开资产面板让用户自己选择
+      setIsAssetPanelOpen(true)
+    }
+  }, [tempAssets])
   
   // 恢复工作流
   const handleResumeWorkflow = async () => {
@@ -745,52 +733,11 @@ export function AgentPage() {
     setErrorMessage(null)
     
     try {
-      let fullContent = ""
-      for await (const chunk of agentApi.resumeWorkflow(sessionId, { provider })) {
-        if (chunk.type === "chunk") {
-          fullContent += chunk.content
-          setStreamingContent(fullContent)
-        } else if (chunk.type === "status") {
-          try {
-            const statusData = JSON.parse(chunk.content || "{}")
-            handleStatusEvent(statusData, sessionId)
-            
-            if (statusData.type === "node_completed" && statusData.stage) {
-              const assetsResult = await agentApi.getTempAssets(sessionId)
-              if (assetsResult.success && assetsResult.data) {
-                setTempAssets(assetsResult.data)
-              }
-            }
-          } catch {
-            // 忽略解析错误
-          }
-        } else if (chunk.type === "done") {
-          const assistantTimestamp = new Date().toISOString()
-          const assistantMessage: AgentMessage = {
-            id: `assistant-${Date.now()}`,
-            session_id: sessionId,
-            role: "assistant",
-            content: fullContent,
-            tool_calls: null,
-            tool_call_id: null,
-            metadata: { resumed: true },
-            tokens_used: null,
-            created_at: assistantTimestamp,
-            updated_at: assistantTimestamp,
-          }
-          setMessages(prev => [...prev, assistantMessage])
-          setStreamingContent("")
-          
-          loadSessions()
-          
-          const assetsResult = await agentApi.getTempAssets(sessionId)
-          if (assetsResult.success && assetsResult.data) {
-            setTempAssets(assetsResult.data)
-          }
-        } else if (chunk.type === "error") {
-          throw new Error(chunk.error || "恢复失败")
-        }
-      }
+      await processSSEStream(
+        agentApi.resumeWorkflow(sessionId, { provider }),
+        sessionId,
+        { metadata: { resumed: true }, errorPrefix: "恢复失败" },
+      )
     } catch (error) {
       setStreamingContent("")
       setErrorMessage(error instanceof Error ? error.message : "恢复工作流失败")
@@ -804,67 +751,6 @@ export function AgentPage() {
     setResumeDialog(null)
   }
   
-  // 用户确认后恢复工作流执行
-  const handleResumeAfterConfirmation = async (sessionId: string) => {
-    setIsStreaming(true)
-    setStreamingContent("")
-    setErrorMessage(null)
-    
-    try {
-      let fullContent = ""
-      for await (const chunk of agentApi.resumeWorkflow(sessionId, { provider })) {
-        if (chunk.type === "chunk") {
-          fullContent += chunk.content
-          setStreamingContent(fullContent)
-        } else if (chunk.type === "status") {
-          try {
-            const statusData = JSON.parse(chunk.content || "{}")
-            handleStatusEvent(statusData, sessionId)
-            
-            if (statusData.type === "node_completed" && statusData.stage) {
-              const assetsResult = await agentApi.getTempAssets(sessionId)
-              if (assetsResult.success && assetsResult.data) {
-                setTempAssets(assetsResult.data)
-              }
-            }
-          } catch {
-            // 忽略解析错误
-          }
-        } else if (chunk.type === "done") {
-          const assistantTimestamp = new Date().toISOString()
-          const assistantMessage: AgentMessage = {
-            id: `assistant-${Date.now()}`,
-            session_id: sessionId,
-            role: "assistant",
-            content: fullContent,
-            tool_calls: null,
-            tool_call_id: null,
-            metadata: { resumed: true },
-            tokens_used: null,
-            created_at: assistantTimestamp,
-            updated_at: assistantTimestamp,
-          }
-          setMessages(prev => [...prev, assistantMessage])
-          setStreamingContent("")
-          
-          loadSessions()
-          
-          const assetsResult = await agentApi.getTempAssets(sessionId)
-          if (assetsResult.success && assetsResult.data) {
-            setTempAssets(assetsResult.data)
-          }
-        } else if (chunk.type === "error") {
-          throw new Error(chunk.error || "恢复失败")
-        }
-      }
-    } catch (error) {
-      setStreamingContent("")
-      setErrorMessage(error instanceof Error ? error.message : "恢复工作流失败")
-    } finally {
-      setIsStreaming(false)
-    }
-  }
-
   // 同步临时资产到项目
   const handleSyncToProject = async () => {
     if (!activeSessionId || tempAssets.length === 0) return
@@ -1051,47 +937,111 @@ export function AgentPage() {
               )}
             </div>
           ) : (
-            // Messages - 对话页
+            // Messages - 对话页 (时间轴布局)
             <div className="max-w-3xl mx-auto px-6 py-6">
-              <div className="space-y-6">
-                {/* Agent 工作流程状态展示 */}
-                {mode === "agent" && stages.length > 0 && (
-                  <WorkflowStatus 
-                    stages={stages}
-                    isExpanded={isStagesExpanded}
-                    onToggle={() => setIsStagesExpanded(!isStagesExpanded)}
-                    completedCount={completedStages}
-                    totalCount={totalStages}
-                    isRunning={isStreaming}
-                    runningStage={runningStage}
-                    expandedStages={expandedStages}
-                    onToggleStage={toggleStageExpand}
-                  />
+              <div className="space-y-2">
+                {(() => {
+                  const hasWorkflow = mode === "agent" && stages.length > 0
+
+                  // Strip system/status lines from assistant message content
+                  const stripSystemLines = (content: string): string => {
+                    return content
+                      .split("\n")
+                      .filter(line => {
+                        // Remove markdown formatting for matching
+                        const t = line.trim().replace(/\*{1,2}|#{1,3}\s*/g, "").trim()
+                        if (!t) return true // keep blank lines
+                        if (/工作流恢复执行/.test(t)) return false
+                        if (/^执行摘要/.test(t)) return false
+                        if (/研究主题\s*[:：]/.test(t)) return false
+                        if (/检索到文献\s*[:：]/.test(t)) return false
+                        if (/生成临时资产\s*[:：]/.test(t)) return false
+                        return true
+                      })
+                      .join("\n")
+                      .trim()
+                  }
+
+                  // Clean all messages: strip system lines, hide empty non-user ones
+                  const visibleMessages = messages
+                    .map(m => {
+                      if (!m.content) return m
+                      const cleaned = stripSystemLines(m.content)
+                      return { ...m, content: cleaned }
+                    })
+                    .filter(m => {
+                      if (m.role !== "user" && !m.content) return false
+                      return true
+                    })
+
+                  // Find the best report candidate: longest assistant message with content > 200 chars
+                  let reportIdx = -1
+                  let reportLen = 0
+                  visibleMessages.forEach((m, i) => {
+                    if (m.role === "assistant" && m.content && m.content.length > 200) {
+                      if (m.content.length > reportLen) {
+                        reportLen = m.content.length
+                        reportIdx = i
+                      }
+                    }
+                  })
+
+                  const isFinalReport = (hasWorkflow || reportIdx >= 0) && reportIdx >= 0 && !isStreaming
+                  
+                  const beforeReport = isFinalReport ? visibleMessages.filter((_, i) => i !== reportIdx) : visibleMessages
+                  const reportMessage = isFinalReport ? visibleMessages[reportIdx] : null
+
+                  return (
+                    <>
+                      {beforeReport.map((msg, index) => {
+                        const isFirstAssistant = msg.role === "assistant" && 
+                          (index === 0 || beforeReport[index - 1]?.role === "user")
+                        return (
+                          <TimelineMessage
+                            key={msg.id}
+                            message={msg}
+                            isFirstAssistantMessage={isFirstAssistant}
+                            currentStageTitle={runningStage?.title}
+                          />
+                        )
+                      })}
+
+                      {hasWorkflow && (
+                        <WorkflowTimeline
+                          stages={stages}
+                          isStreaming={isStreaming}
+                          currentStageTitle={runningStage?.title}
+                          onToolPillClick={handleToolPillClick}
+                          assetTitles={tempAssets.map(a => (a.title || "").toLowerCase())}
+                        />
+                      )}
+
+                      {/* Streaming content as ArtifactCard */}
+                      {isStreaming && streamingContent && (
+                        <ArtifactCard
+                          content={streamingContent}
+                          isStreaming
+                        />
+                      )}
+
+                      {/* Final report as ArtifactCard */}
+                      {reportMessage && reportMessage.content && (
+                        <ArtifactCard
+                          content={reportMessage.content}
+                        />
+                      )}
+                    </>
+                  )
+                })()}
+                
+                {/* Thinking indicator when streaming but no content and no stages yet */}
+                {isStreaming && !streamingContent && stages.length === 0 && (
+                  <div className="mb-8">
+                    <ThinkingIndicator text="Analyzing..." />
+                  </div>
                 )}
                 
-                {messages.map((msg) => (
-                  <MessageBubble key={msg.id} message={msg} />
-                ))}
-                
-                {isStreaming && streamingContent && (
-                  <MessageBubble 
-                    message={{
-                      id: "streaming",
-                      session_id: "",
-                      role: "assistant",
-                      content: streamingContent,
-                      tool_calls: null,
-                      tool_call_id: null,
-                      metadata: {},
-                      tokens_used: null,
-                      created_at: new Date().toISOString(),
-                      updated_at: new Date().toISOString(),
-                    }}
-                    isStreaming
-                  />
-                )}
-                
-                {/* 用户确认对话框 */}
+                {/* User confirmation dialog */}
                 {confirmationDialog && (
                   <ConfirmationDialog 
                     message={confirmationDialog.message}
@@ -1111,7 +1061,18 @@ export function AgentPage() {
         {!isWelcomePage && (
           <div className="px-6 pb-6">
             <div className="max-w-3xl mx-auto">
-              <div className="rounded-3xl bg-[hsl(var(--secondary))] px-4 py-3 focus-within:ring-2 focus-within:ring-[hsl(var(--ring))] focus-within:bg-[hsl(var(--card))] transition-all duration-200">
+              {/* Task Progress Card - above input */}
+              {mode === "agent" && stages.length > 0 && (
+                <TaskProgressCard
+                  stages={stages}
+                  completedCount={completedStages}
+                  totalCount={totalStages}
+                  isRunning={isStreaming}
+                  runningStageTitle={runningStage?.title}
+                />
+              )}
+              
+              <div className="rounded-2xl bg-[hsl(var(--card))] border border-[hsl(var(--border))] px-4 py-3 shadow-[0_2px_12px_rgba(0,0,0,0.04)] focus-within:border-[hsl(var(--primary))/0.4] focus-within:shadow-[0_4px_20px_rgba(0,0,0,0.06)] transition-all duration-200">
                 <textarea
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
@@ -1121,8 +1082,8 @@ export function AgentPage() {
                       handleSend()
                     }
                   }}
-                  placeholder="继续提问..."
-                  className="w-full resize-none bg-transparent text-sm placeholder:text-[hsl(var(--muted-foreground))] focus:outline-none text-[hsl(var(--foreground))]"
+                  placeholder="Continue your research..."
+                  className="w-full resize-none bg-transparent text-[15px] placeholder:text-[hsl(var(--muted-foreground))] focus:outline-none text-[hsl(var(--foreground))] leading-relaxed"
                   rows={1}
                   style={{ minHeight: '24px', maxHeight: '200px' }}
                   onInput={(e) => {
@@ -1132,7 +1093,7 @@ export function AgentPage() {
                   }}
                   disabled={isStreaming}
                 />
-                <div className="flex items-center justify-between mt-2 pt-2 border-t border-[hsl(var(--border))]/50">
+                <div className="flex items-center justify-between mt-2 pt-2">
                   <div className="flex items-center gap-3">
                     <ModelSelector
                       value={provider}
@@ -1150,7 +1111,7 @@ export function AgentPage() {
                     className={cn(
                       "flex h-9 w-9 items-center justify-center rounded-full transition-all duration-200",
                       input.trim() && !isStreaming
-                        ? "bg-[hsl(var(--foreground))] text-[hsl(var(--background))] hover:opacity-80 active:scale-95"
+                        ? "bg-[hsl(var(--primary))] text-white hover:opacity-90 active:scale-95"
                         : "bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] cursor-not-allowed"
                     )}
                     disabled={!input.trim() || isStreaming}
@@ -1247,189 +1208,6 @@ export function AgentPage() {
           onCancel={handleCancelResume}
         />
       )}
-    </div>
-  )
-}
-
-// Agent 工作流程状态组件 - 增强版
-function WorkflowStatus({ 
-  stages, 
-  isExpanded, 
-  onToggle, 
-  completedCount, 
-  totalCount,
-  isRunning,
-  runningStage,
-  expandedStages,
-  onToggleStage,
-}: { 
-  stages: StageStatus[]
-  isExpanded: boolean
-  onToggle: () => void
-  completedCount: number
-  totalCount: number
-  isRunning: boolean
-  runningStage?: StageStatus
-  expandedStages: Set<number>
-  onToggleStage: (stage: number) => void
-}) {
-  return (
-    <div className="rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-hidden transition-all duration-300">
-      {/* Header */}
-      <button 
-        onClick={onToggle}
-        className="w-full px-4 py-3 flex items-center justify-between hover:bg-[hsl(var(--secondary))]/50 transition-colors"
-      >
-        <div className="flex items-center gap-2">
-          {isRunning ? (
-            <Loader2 className="h-4 w-4 text-blue-500 animate-spin" strokeWidth={2} />
-          ) : (
-            <Check className="h-4 w-4 text-green-500" strokeWidth={2} />
-          )}
-          <span className="text-sm font-medium text-[hsl(var(--foreground))]">
-            {isRunning 
-              ? `正在执行: ${runningStage?.title || "..."}`
-              : `已完成 ${completedCount} 个阶段`
-            }
-          </span>
-        </div>
-        <ChevronDown 
-          className={cn(
-            "h-4 w-4 text-[hsl(var(--muted-foreground))] transition-transform duration-200",
-            !isExpanded && "-rotate-90"
-          )} 
-          strokeWidth={1.5} 
-        />
-      </button>
-      
-      {/* Expanded Content */}
-      {isExpanded && (
-        <div className="px-4 pb-3 space-y-1">
-          {stages.map((stage) => (
-            <div key={stage.stage} className="space-y-1">
-              {/* Stage Header */}
-              <button
-                onClick={() => onToggleStage(stage.stage)}
-                className="w-full flex items-center gap-3 py-1.5 hover:bg-[hsl(var(--secondary))]/30 rounded transition-colors"
-              >
-                {stage.status === "completed" ? (
-                  <div className="h-5 w-5 rounded-full bg-green-500/10 flex items-center justify-center">
-                    <Check className="h-3 w-3 text-green-500" strokeWidth={2.5} />
-                  </div>
-                ) : stage.status === "running" ? (
-                  <div className="h-5 w-5 rounded-full bg-blue-500/10 flex items-center justify-center">
-                    <Loader2 className="h-3 w-3 text-blue-500 animate-spin" strokeWidth={2.5} />
-                  </div>
-                ) : stage.status === "failed" ? (
-                  <div className="h-5 w-5 rounded-full bg-red-500/10 flex items-center justify-center">
-                    <AlertTriangle className="h-3 w-3 text-red-500" strokeWidth={2.5} />
-                  </div>
-                ) : (
-                  <div className="h-5 w-5 rounded-full bg-[hsl(var(--muted))] flex items-center justify-center">
-                    <Circle className="h-2 w-2 text-[hsl(var(--muted-foreground))]" strokeWidth={2} />
-                  </div>
-                )}
-                <span className={cn(
-                  "flex-1 text-left text-sm",
-                  stage.status === "running" 
-                    ? "text-[hsl(var(--foreground))] font-medium"
-                    : "text-[hsl(var(--muted-foreground))]"
-                )}>
-                  {stage.title}
-                </span>
-                {stage.steps.length > 0 && (
-                  <ChevronRight 
-                    className={cn(
-                      "h-4 w-4 text-[hsl(var(--muted-foreground))] transition-transform duration-200",
-                      expandedStages.has(stage.stage) && "rotate-90"
-                    )} 
-                    strokeWidth={1.5} 
-                  />
-                )}
-              </button>
-              
-              {/* Stage Summary */}
-              {stage.summary && (
-                <div className="ml-8 text-xs text-[hsl(var(--muted-foreground))] bg-[hsl(var(--secondary))]/50 px-2 py-1 rounded">
-                  {stage.summary}
-                </div>
-              )}
-              
-              {/* Stage Error */}
-              {stage.error && (
-                <div className="ml-8 text-xs text-red-500 bg-red-500/5 px-2 py-1 rounded">
-                  {stage.error}
-                </div>
-              )}
-              
-              {/* Steps */}
-              {expandedStages.has(stage.stage) && stage.steps.length > 0 && (
-                <div className="ml-8 space-y-1 border-l-2 border-[hsl(var(--border))] pl-3">
-                  {stage.steps.map((step) => (
-                    <div key={step.nodeId} className="flex items-start gap-2 py-1">
-                      {step.status === "completed" ? (
-                        <Check className="h-3.5 w-3.5 text-green-500 mt-0.5" strokeWidth={2} />
-                      ) : step.status === "running" ? (
-                        <Loader2 className="h-3.5 w-3.5 text-blue-500 animate-spin mt-0.5" strokeWidth={2} />
-                      ) : step.status === "failed" ? (
-                        <AlertTriangle className="h-3.5 w-3.5 text-red-500 mt-0.5" strokeWidth={2} />
-                      ) : (
-                        <Circle className="h-3.5 w-3.5 text-[hsl(var(--muted-foreground))] mt-0.5" strokeWidth={2} />
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <span className="text-xs text-[hsl(var(--muted-foreground))]">
-                          {step.title}
-                        </span>
-                        {step.summary && (
-                          <span className="text-xs text-[hsl(var(--muted-foreground))]/70 ml-2">
-                            - {step.summary}
-                          </span>
-                        )}
-                        {step.error && (
-                          <div className="text-xs text-red-500 mt-0.5">
-                            {step.error}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function MessageBubble({ message, isStreaming }: { message: AgentMessage; isStreaming?: boolean }) {
-  const isUser = message.role === "user"
-  
-  if (isUser) {
-    return (
-      <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-2xl rounded-br-md px-4 py-3 bg-[hsl(var(--secondary))] text-[hsl(var(--foreground))]">
-          <p className="text-sm whitespace-pre-wrap leading-relaxed break-words">
-            {message.content}
-          </p>
-        </div>
-      </div>
-    )
-  }
-  
-  return (
-    <div className="flex gap-3">
-      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-purple-600">
-        <Sparkles className="h-3.5 w-3.5 text-white" strokeWidth={2} />
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="prose prose-sm dark:prose-invert max-w-none text-[hsl(var(--foreground))] prose-p:my-2 prose-headings:my-3 prose-headings:font-semibold prose-h1:text-xl prose-h2:text-lg prose-h3:text-base prose-h4:text-sm prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-pre:my-2 prose-code:text-[hsl(var(--primary))] prose-code:bg-[hsl(var(--secondary))] prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-pre:bg-[hsl(var(--secondary))] prose-pre:border prose-pre:border-[hsl(var(--border))] prose-strong:text-[hsl(var(--foreground))] prose-strong:font-semibold">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-            {message.content}
-          </ReactMarkdown>
-        </div>
-      </div>
     </div>
   )
 }
@@ -1844,16 +1622,57 @@ function AssetSection({ icon: Icon, label, count, assets, onViewAsset, defaultOp
 
 // 资产详情侧边面板 - 挤压主区域
 function AssetDetailPanel({ asset, onClose }: { asset: TempAsset; onClose: () => void }) {
+  const [copied, setCopied] = useState(false)
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
+    }
+  }, [])
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(asset.content || '')
+      setCopied(true)
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
+      copyTimerRef.current = setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // fallback
+      const ta = document.createElement('textarea')
+      ta.value = asset.content || ''
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+      setCopied(true)
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
+      copyTimerRef.current = setTimeout(() => setCopied(false), 2000)
+    }
+  }
+
   return (
     <aside className="w-96 flex flex-col bg-[hsl(var(--card))] border-l border-[hsl(var(--border))] animate-in slide-in-from-right duration-200">
       <div className="flex items-center justify-between px-4 py-3 border-b border-[hsl(var(--border))]">
         <h3 className="font-medium text-[hsl(var(--foreground))] truncate flex-1 mr-2">{asset.title || "资产详情"}</h3>
-        <button 
-          onClick={onClose}
-          className="p-1.5 rounded-lg hover:bg-[hsl(var(--secondary))] transition-material flex-shrink-0"
-        >
-          <X className="h-4 w-4 text-[hsl(var(--muted-foreground))]" strokeWidth={1.5} />
-        </button>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <button
+            onClick={handleCopy}
+            className="p-1.5 rounded-lg hover:bg-[hsl(var(--secondary))] transition-material"
+            title={copied ? "已复制" : "复制内容"}
+          >
+            {copied
+              ? <ClipboardCheck className="h-4 w-4 text-green-500" strokeWidth={1.5} />
+              : <Copy className="h-4 w-4 text-[hsl(var(--muted-foreground))]" strokeWidth={1.5} />
+            }
+          </button>
+          <button 
+            onClick={onClose}
+            className="p-1.5 rounded-lg hover:bg-[hsl(var(--secondary))] transition-material"
+          >
+            <X className="h-4 w-4 text-[hsl(var(--muted-foreground))]" strokeWidth={1.5} />
+          </button>
+        </div>
       </div>
       <div className="flex-1 overflow-auto p-4">
         <div className="mb-3 flex items-center gap-2 text-xs text-[hsl(var(--muted-foreground))]">

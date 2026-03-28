@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 
 @layer base {
   :root {
@@ -302,4 +303,95 @@
 
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
+}
+
+/* ======== Agent 时间轴系统 ======== */
+
+/* Thinking 流光文字效果 */
+.thinking-shimmer {
+  font-size: 14px;
+  font-weight: 500;
+  background: linear-gradient(
+    90deg,
+    hsl(var(--muted-foreground)) 0%,
+    hsl(var(--muted-foreground) / 0.4) 20%,
+    hsl(var(--foreground)) 40%,
+    hsl(var(--muted-foreground) / 0.4) 60%,
+    hsl(var(--muted-foreground)) 80%,
+    hsl(var(--muted-foreground)) 100%
+  );
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: shimmer 3s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+/* 流式输出闪烁光标 */
+.streaming-cursor::after {
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: hsl(var(--primary));
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: blink-cursor 1s step-end infinite;
+}
+
+@keyframes blink-cursor {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* 步骤块展开/收起动画 */
+.step-content-enter {
+  animation: step-expand 0.25s ease forwards;
+}
+
+@keyframes step-expand {
+  from {
+    opacity: 0;
+    max-height: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    max-height: 2000px;
+    transform: translateY(0);
+  }
+}
+
+/* 工具胶囊点击缩放 */
+.tool-pill-press:active {
+  transform: scale(0.98);
+}
+
+/* 进度卡片展开动画 */
+.progress-expand {
+  animation: progress-slide 0.2s ease forwards;
+}
+
+@keyframes progress-slide {
+  from {
+    opacity: 0;
+    max-height: 0;
+  }
+  to {
+    opacity: 1;
+    max-height: 500px;
+  }
+}
+
+/* 建议后续操作 hover 右移 */
+.followup-item {
+  transition: padding-left 0.2s ease;
+}
+.followup-item:hover {
+  padding-left: 8px;
 }

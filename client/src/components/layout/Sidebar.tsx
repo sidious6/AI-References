@@ -473,7 +473,7 @@ function BottomSection() {
               {(user?.username?.[0] || user?.email?.[0] || 'U').toUpperCase()}
             </div>
             <span className="text-sm truncate">
-              {user?.email || '用户'}
+              {user?.id === 'local-user' ? '本地用户' : (user?.email || '用户')}
             </span>
           </button>
         </DropdownMenuTrigger>
@@ -484,21 +484,29 @@ function BottomSection() {
           className="w-52 rounded-xl p-1.5 surface-3 border-0"
         >
           <div className="px-3 py-2">
-            <p className="text-sm font-medium">{user?.username || '用户'}</p>
-            <p className="text-xs text-[hsl(var(--muted-foreground))] truncate">{user?.email}</p>
+            <p className="text-sm font-medium">
+              {user?.id === 'local-user' ? '本地用户' : (user?.username || '用户')}
+            </p>
+            <p className="text-xs text-[hsl(var(--muted-foreground))] truncate">
+              {user?.id === 'local-user' ? '数据存储在本地' : user?.email}
+            </p>
           </div>
           <DropdownMenuSeparator className="bg-[hsl(var(--border))]" />
-          <DropdownMenuItem className="rounded-lg px-3 py-2 cursor-pointer">
-            <User className="mr-2.5 h-4 w-4" strokeWidth={1.5} />
-            <span>账号设置</span>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator className="bg-[hsl(var(--border))]" />
+          {user?.id !== 'local-user' && (
+            <>
+              <DropdownMenuItem className="rounded-lg px-3 py-2 cursor-pointer">
+                <User className="mr-2.5 h-4 w-4" strokeWidth={1.5} />
+                <span>账号设置</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator className="bg-[hsl(var(--border))]" />
+            </>
+          )}
           <DropdownMenuItem 
             onClick={handleLogout}
             className="rounded-lg px-3 py-2 cursor-pointer text-[hsl(var(--destructive))]"
           >
             <LogOut className="mr-2.5 h-4 w-4" strokeWidth={1.5} />
-            <span>退出登录</span>
+            <span>{user?.id === 'local-user' ? '退出' : '退出登录'}</span>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

@@ -112,6 +112,12 @@ export interface WorkflowCheckpoint {
     projectExistingIds: string[];
     candidateLiteratureCount: number;
     queriesCount: number;
+    // 关键数据完整序列化（恢复后续阶段必需）
+    mergedRecords?: Record<string, unknown>[];
+    queries?: { section: string; query: string; source?: string; keywords_en?: string[] }[];
+    candidateLiterature?: Record<string, unknown>[];
+    parsedDirection?: { research_topic?: string; keywords?: string[]; domain?: string; constraints?: string } | null;
+    webSearchAnalysis?: string | null;
   };
   savedAt: string;
   pauseReason?: string;

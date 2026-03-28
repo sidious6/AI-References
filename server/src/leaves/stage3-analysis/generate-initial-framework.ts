@@ -9,14 +9,41 @@ import type { ChatMessage } from '../../types/llm.js';
 export async function generateInitialFramework({ ctx }: ToolInput): Promise<ToolResult> {
   const topic = ctx.session.research_topic || '';
   const goal = ctx.session.research_goal || '';
+  const parsed = ctx.state.parsedDirection;
   
   console.log(`[generateInitialFramework] 研究主题: ${topic}`);
   ctx.state.logs.push(`生成研究框架: ${topic.slice(0, 50)}`);
   
+  // 汇总上游信息供 LLM 参考
+  const contextParts: string[] = [
+    `研究主题: ${topic}`,
+    `研究目标: ${goal}`,
+  ];
+
+  if (parsed?.keywords?.length) {
+    contextParts.push(`关键词: ${parsed.keywords.join(', ')}`);
+  }
+  if (parsed?.domain) {
+    contextParts.push(`学科领域: ${parsed.domain}`);
+  }
+  if (parsed?.constraints) {
+    contextParts.push(`约束条件: ${parsed.constraints}`);
+  }
+  if (ctx.state.projectDocuments.length > 0) {
+    const docSnippets = ctx.state.projectDocuments
+      .filter(d => d.snippet)
+      .map(d => `[${d.name}] ${d.snippet!.slice(0, 300)}`)
+      .join('\n');
+    if (docSnippets) contextParts.push(`项目文档摘要:\n${docSnippets}`);
+  }
+  if (ctx.state.webSearchAnalysis) {
+    contextParts.push(`网络调研结果:\n${ctx.state.webSearchAnalysis.slice(0, 800)}`);
+  }
+
   try {
     const messages: ChatMessage[] = [
       { role: 'system', content: `${getPrompt('FRAMEWORK_GENERATION')}\n请输出到二级标题的章节框架，先给 JSON，再给可读版。` },
-      { role: 'user', content: `研究主题: ${topic}\n研究目标: ${goal}` },
+      { role: 'user', content: contextParts.join('\n') },
     ];
     const res = await callLLM(messages);
     

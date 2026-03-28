@@ -98,7 +98,7 @@ export async function matchExistingProject({ ctx }: ToolInput): Promise<ToolResu
   });
   
   // 保存匹配结果到状态
-  (ctx.state as any).projectMatches = matches.map(m => ({
+  ctx.state.projectMatches = matches.map(m => ({
     ...m.project,
     _matchScore: m.score,
   }));

@@ -5,7 +5,7 @@
 import type { ToolInput, ToolResult } from '../types.js';
 
 export async function dedupeHistory({ ctx }: ToolInput): Promise<ToolResult> {
-  const merged = (ctx.state as any).mergedRecords || [];
+  const merged = ctx.state.mergedRecords || [];
   const before = merged.length;
   
   const filtered = merged.filter((r: any) => {
@@ -13,7 +13,7 @@ export async function dedupeHistory({ ctx }: ToolInput): Promise<ToolResult> {
     return key && !ctx.state.historyIds.has(key);
   });
   
-  (ctx.state as any).mergedRecords = filtered;
+  ctx.state.mergedRecords = filtered;
   
   const removed = before - filtered.length;
   if (removed > 0) {

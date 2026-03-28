@@ -14,14 +14,14 @@ export async function dedupeProject({ ctx }: ToolInput): Promise<ToolResult> {
     existing.map(l => (l.doi || l.title || '').toLowerCase()).filter(Boolean)
   );
   
-  const merged = (ctx.state as any).mergedRecords || [];
+  const merged = ctx.state.mergedRecords || [];
   const before = merged.length;
   
   const filtered = merged.filter((r: any) => 
     !existingKeys.has((r.doi || r.title || '').toLowerCase())
   );
   
-  (ctx.state as any).mergedRecords = filtered;
+  ctx.state.mergedRecords = filtered;
   ctx.state.projectExistingIds = existingKeys;
   
   const removed = before - filtered.length;

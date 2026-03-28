@@ -13,6 +13,8 @@ export async function readProjectImages({ ctx }: ToolInput): Promise<ToolResult>
     filters: { project_id: projectId, type: 'image' } 
   });
   
-  ctx.state.logs.push(`读取 ${docs.length} 个项目图片`);
-  return { output: docs.map(d => ({ id: d.id, name: d.name })) };
+  const result = docs.map(d => ({ id: d.id, name: d.name }));
+  ctx.state.projectImages = result;
+  ctx.state.logs.push(`读取 ${result.length} 个项目图片`);
+  return { output: result };
 }

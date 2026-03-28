@@ -6,14 +6,7 @@ import type { ToolInput, ToolResult } from '../types.js';
 import { agentSessionRepository } from '../../lib/repository.js';
 import { llmService } from '../../services/llm.service.js';
 import { PROMPTS } from '../../prompts/index.js';
-
-interface ProjectCandidate {
-  id: string;
-  name: string;
-  description?: string;
-  created_at?: string;
-  _matchScore: number;
-}
+import type { ProjectCandidate } from '../../services/deepreference/recode.types.js';
 
 interface LLMMatchResult {
   matched: boolean;
@@ -86,7 +79,7 @@ export async function askProjectSelection({ ctx }: ToolInput): Promise<ToolResul
     return { output: { action: 'already_bound', projectId: ctx.session.project_id } };
   }
   
-  const matches: ProjectCandidate[] = (ctx.state as any).projectMatches || [];
+  const matches: ProjectCandidate[] = ctx.state.projectMatches || [];
   const topic = ctx.session.research_topic || '';
   
   // 无候选项目，需要创建新项目
@@ -94,7 +87,7 @@ export async function askProjectSelection({ ctx }: ToolInput): Promise<ToolResul
     console.log('[项目选择] 无候选项目，等待用户确认创建');
     ctx.state.logs.push('无匹配项目，等待用户确认');
     
-    (ctx.state as any).pendingProjectAction = {
+    ctx.state.pendingProjectAction = {
       action: 'create_new',
       reason: 'no_candidates',
       topic,
@@ -170,7 +163,7 @@ export async function askProjectSelection({ ctx }: ToolInput): Promise<ToolResul
   console.log(`[项目选择] 等待用户选择，推荐: ${recommendedProject?.name || '无'}`);
   ctx.state.logs.push('等待用户选择项目');
   
-  (ctx.state as any).pendingProjectAction = {
+  ctx.state.pendingProjectAction = {
     action: 'select_or_create',
     recommendedProjectId: recommendedProject?.id,
     candidates: candidatesToShow,

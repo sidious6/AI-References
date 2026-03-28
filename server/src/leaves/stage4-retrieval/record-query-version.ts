@@ -5,7 +5,7 @@
 import type { ToolInput, ToolResult } from '../types.js';
 
 export async function recordQueryVersion({ ctx }: ToolInput): Promise<ToolResult> {
-  const queries = (ctx.state as any).queries || [];
+  const queries = ctx.state.queries || [];
   
   const asset = {
     session_id: ctx.session.id,

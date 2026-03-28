@@ -15,8 +15,8 @@ export async function createNewProject({ ctx }: ToolInput): Promise<ToolResult> 
   }
   
   // 检查用户确认结果
-  const userConfirmation = (ctx.state as any).userConfirmation;
-  const pendingAction = (ctx.state as any).pendingProjectAction;
+  const userConfirmation = ctx.state.userConfirmation;
+  const pendingAction = ctx.state.pendingProjectAction;
   
   // 如果用户选择创建新项目
   if (pendingAction?.action === 'create_new' || userConfirmation?.selectedOption === 'create') {

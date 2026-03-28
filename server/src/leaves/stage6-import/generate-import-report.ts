@@ -4,12 +4,13 @@
  * 保存完整的文献数据供同步使用
  */
 import type { ToolInput, ToolResult } from '../types.js';
+import type { LiteratureRecord } from '../../services/deepreference/recode.types.js';
 
 export async function generateImportReport({ ctx }: ToolInput): Promise<ToolResult> {
-  const records = (ctx.state as any).mergedRecords || [];
-  const approved = records.filter((r: any) => r.status === 'approved');
-  const rejected = records.filter((r: any) => r.status === 'rejected');
-  const pending = records.filter((r: any) => r.status === 'pending' || !r.status);
+  const records: LiteratureRecord[] = ctx.state.mergedRecords || [];
+  const approved = records.filter(r => r.status === 'approved');
+  const rejected = records.filter(r => r.status === 'rejected');
+  const pending = records.filter(r => r.status === 'pending' || !r.status);
   
   const summary = [
     `## 文献入库报告`,
@@ -24,7 +25,7 @@ export async function generateImportReport({ ctx }: ToolInput): Promise<ToolResu
   ctx.state.logs.push(`入库报告: ${approved.length}/${records.length} 篇通过`);
   
   // 保存完整的文献数据供同步使用
-  const papers = records.map((r: any) => ({
+  const papers = records.map(r => ({
     title: r.title || '',
     authors: r.authors || [],
     year: r.year || null,
@@ -34,7 +35,7 @@ export async function generateImportReport({ ctx }: ToolInput): Promise<ToolResu
     doi: r.doi || null,
     source_database: r.source_database || '',
     ai_relevance_score: r.ai_relevance_score || null,
-    ai_inclusion_reason: r.ai_inclusion_reason || r.reason || null,
+    ai_inclusion_reason: r.screening_reason || r.ai_inclusion_reason || null,
     status: r.status || 'pending',
     scopus_id: r.scopus_id || null,
     scopus_link: r.scopus_link || null,

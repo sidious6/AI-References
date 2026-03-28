@@ -145,8 +145,8 @@ export const settingsController = {
   // POST /api/settings/test-llm
   async testLLM(req: Request, res: Response) {
     try {
-      const { provider } = req.body;
-      const result = await settingsService.testLLMConnection(provider);
+      const { endpoint_id } = req.body;
+      const result = await settingsService.testLLMConnection(endpoint_id);
       res.json({ success: true, data: result });
     } catch (error) {
       console.error('Error testing LLM connection:', error);

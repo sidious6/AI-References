@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
+import OpenAI from 'openai';
 import { getSetting, setSetting, getSettingsByCategory } from '../lib/repository.js';
 import { encrypt, decrypt, maskSecret } from '../lib/crypto.js';
 import { config } from '../config/index.js';
@@ -12,6 +13,9 @@ export interface GeneralSettings {
   density: 'compact' | 'standard' | 'comfortable';
 }
 
+// 配置来源: env=环境变量, db=前端保存到数据库, none=未配置
+export type ConfigSource = 'env' | 'db' | 'none';
+
 // 模型端点配置
 export interface ModelEndpoint {
   id: string;
@@ -23,6 +27,7 @@ export interface ModelEndpoint {
   default_model: string;
   is_preset: boolean;
   enabled: boolean;
+  config_source?: ConfigSource; // 当前生效配置的来源
 }
 
 // 模型配置
@@ -59,6 +64,8 @@ export interface EnvironmentInfo {
   data_dir: string;
   data_dir_exists: boolean;
   data_dir_size: string;
+  storage_provider: string;
+  sqlite_path: string;
   supabase_connected: boolean;
   llm_configured: boolean;
   default_endpoint: string;
@@ -157,14 +164,25 @@ class SettingsService {
     const endpoints: ModelEndpoint[] = PRESET_ENDPOINTS.map(preset => {
       const saved = savedEndpoints.find(e => e.id === preset.id);
       const envKey = this.getEnvApiKey(preset.id);
-      const apiKey = saved?.api_key ? decrypt(saved.api_key) : envKey;
+      const dbKey = saved?.api_key ? decrypt(saved.api_key) : '';
+      // 确定配置来源和生效的 key
+      let configSource: ConfigSource = 'none';
+      let apiKey = '';
+      if (dbKey) {
+        configSource = 'db';
+        apiKey = dbKey;
+      } else if (envKey) {
+        configSource = 'env';
+        apiKey = envKey;
+      }
       
       return {
         ...preset,
-        api_key: '', // 不返回明文
+        api_key: '',
         api_key_masked: apiKey ? maskSecret(apiKey) : '',
-        enabled: saved?.enabled ?? !!envKey,
+        enabled: saved?.enabled ?? !!apiKey,
         default_model: saved?.default_model || preset.default_model || this.getEnvModel(preset.id),
+        config_source: configSource,
       };
     });
 
@@ -176,6 +194,7 @@ class SettingsService {
         ...custom,
         api_key: '',
         api_key_masked: apiKey ? maskSecret(apiKey) : '',
+        config_source: apiKey ? 'db' : 'none',
       });
     }
 
@@ -389,6 +408,8 @@ class SettingsService {
       data_dir: dataDir,
       data_dir_exists: dataDirExists,
       data_dir_size: dataDirSize,
+      storage_provider: config.database.provider,
+      sqlite_path: config.database.sqlitePath,
       supabase_connected: supabaseConnected,
       llm_configured: !!defaultEndpoint?.api_key_masked,
       default_endpoint: defaultEndpoint?.name || '未配置',
@@ -409,7 +430,86 @@ class SettingsService {
       return { success: false, message: `${endpoint.name} API Key 未配置` };
     }
 
-    return { success: true, message: `${endpoint.name} 配置有效` };
+    if (!effectiveConfig.model) {
+      return { success: false, message: `${endpoint.name} 模型名称未配置` };
+    }
+
+    const startTime = Date.now();
+    try {
+      if (endpoint.protocol === 'openai') {
+        // OpenAI 兼容协议 (OpenAI, Ark, DeepSeek, Qwen, Bailian)
+        const client = new OpenAI({
+          apiKey: effectiveConfig.apiKey,
+          baseURL: effectiveConfig.baseUrl,
+          timeout: 15000,
+        });
+        const completion = await client.chat.completions.create({
+          model: effectiveConfig.model,
+          messages: [{ role: 'user', content: 'Hi' }],
+          max_tokens: 5,
+        });
+        const elapsed = Date.now() - startTime;
+        const content = completion.choices[0]?.message?.content || '';
+        return {
+          success: true,
+          message: `${endpoint.name} 连接成功 (${elapsed}ms)，模型: ${completion.model}，回复: "${content.slice(0, 30)}"`,
+        };
+      } else if (endpoint.protocol === 'anthropic') {
+        // Anthropic 使用 HTTP 直接请求避免额外依赖
+        const resp = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': effectiveConfig.apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: effectiveConfig.model,
+            max_tokens: 5,
+            messages: [{ role: 'user', content: 'Hi' }],
+          }),
+          signal: AbortSignal.timeout(15000),
+        });
+        const elapsed = Date.now() - startTime;
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          return { success: false, message: `${endpoint.name} 请求失败: ${(err as Record<string, unknown>).error || resp.statusText}` };
+        }
+        const data = await resp.json() as { model?: string; content?: { text?: string }[] };
+        const text = data.content?.[0]?.text || '';
+        return {
+          success: true,
+          message: `${endpoint.name} 连接成功 (${elapsed}ms)，模型: ${data.model}，回复: "${text.slice(0, 30)}"`,
+        };
+      } else if (endpoint.protocol === 'google') {
+        // Google Gemini 使用 HTTP 直接请求
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${effectiveConfig.model}:generateContent?key=${effectiveConfig.apiKey}`;
+        const resp = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: 'Hi' }] }],
+            generationConfig: { maxOutputTokens: 5 },
+          }),
+          signal: AbortSignal.timeout(15000),
+        });
+        const elapsed = Date.now() - startTime;
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          return { success: false, message: `${endpoint.name} 请求失败: ${(err as Record<string, unknown>).error || resp.statusText}` };
+        }
+        return {
+          success: true,
+          message: `${endpoint.name} 连接成功 (${elapsed}ms)`,
+        };
+      }
+
+      return { success: false, message: `不支持的协议: ${endpoint.protocol}` };
+    } catch (err) {
+      const elapsed = Date.now() - startTime;
+      const errMsg = err instanceof Error ? err.message : String(err);
+      return { success: false, message: `${endpoint.name} 连接失败 (${elapsed}ms): ${errMsg}` };
+    }
   }
 
   async getAllSettings() {

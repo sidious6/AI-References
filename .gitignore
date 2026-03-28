@@ -57,3 +57,5 @@ server/data/
 开发进度.md
 DATABASE.md
 Recode架构.md
+core.*
+.mcp.json

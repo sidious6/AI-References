@@ -7,7 +7,9 @@ import { callLLM, getPrompt } from '../utils.js';
 import type { ChatMessage } from '../../types/llm.js';
 
 export async function writeSectionDraft({ ctx }: ToolInput): Promise<ToolResult> {
-  const outline = ctx.state.tempAssets.find(a => a.title === '写作大纲' || a.type === 'draft');
+  // 优先精确匹配写作大纲，回退到最新的 chapter_framework，避免匹配到其他 draft
+  const outline = ctx.state.tempAssets.find(a => a.title === '写作大纲')
+    || [...ctx.state.tempAssets].reverse().find(a => a.type === 'chapter_framework');
   
   const messages: ChatMessage[] = [
     { role: 'system', content: `${getPrompt('SECTION_DRAFT')}\n请按中文输出正文，带小标题。` },

@@ -8,17 +8,9 @@
  * 4. CORE API 获取摘要
  */
 import type { ToolInput, ToolResult } from '../types.js';
+import type { LiteratureRecord } from '../../services/deepreference/recode.types.js';
 import { config } from '../../config/index.js';
 import * as cheerio from 'cheerio';
-
-interface LiteratureRecord {
-  id?: string;
-  title: string;
-  doi?: string | null;
-  abstract?: string;
-  source_database?: string;
-  [key: string]: unknown;
-}
 
 interface FetchResult {
   doi: string;
@@ -804,7 +796,7 @@ async function fetchWithConcurrencyControl(
 
 // 主工具函数
 export async function fetchDoiAbstracts({ ctx }: ToolInput): Promise<ToolResult> {
-  const records: LiteratureRecord[] = (ctx.state as any).mergedRecords || [];
+  const records: LiteratureRecord[] = ctx.state.mergedRecords || [];
   
   if (records.length === 0) {
     console.log('[DOI] 无文献记录，跳过摘要抓取');
@@ -870,7 +862,7 @@ export async function fetchDoiAbstracts({ ctx }: ToolInput): Promise<ToolResult>
   
   ctx.state.logs.push(`DOI 摘要抓取完成: 成功 ${successCount}/${missingAbstract.length}`);
   
-  (ctx.state as any).mergedRecords = records;
+  ctx.state.mergedRecords = records;
   
   return {
     output: {

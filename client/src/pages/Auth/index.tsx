@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Eye, EyeOff, Mail, Lock, User, Loader2 } from 'lucide-react';
+import { Eye, EyeOff, Mail, Lock, User, Loader2, HardDrive, Cloud } from 'lucide-react';
 import { authApi } from '@/services/api';
 import { useAuthStore } from '@/stores/auth.store';
 
@@ -12,6 +12,7 @@ export function AuthPage() {
   const [mode, setMode] = useState<AuthMode>('login');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [localLoading, setLocalLoading] = useState(false);
   const [error, setError] = useState('');
 
   const [form, setForm] = useState({
@@ -62,6 +63,25 @@ export function AuthPage() {
     }
   };
 
+  // 本地模式登录
+  const handleLocalLogin = async () => {
+    setError('');
+    setLocalLoading(true);
+    try {
+      const res = await authApi.localLogin();
+      if (res.success && res.data) {
+        setAuth(res.data.user, res.data.token);
+        navigate('/project');
+      } else {
+        setError(res.error || '本地登录失败');
+      }
+    } catch (err: any) {
+      setError(err.message || '本地登录失败');
+    } finally {
+      setLocalLoading(false);
+    }
+  };
+
   const switchMode = () => {
     setMode(mode === 'login' ? 'register' : 'login');
     setError('');
@@ -85,6 +105,32 @@ export function AuthPage() {
 
         {/* Form Card */}
         <div className="rounded-2xl bg-[hsl(var(--card))] border border-[hsl(var(--border))] p-8">
+          {/* 本地模式入口 - 始终显示 */}
+          <button
+            onClick={handleLocalLogin}
+            disabled={localLoading}
+            className="w-full h-12 rounded-xl bg-[hsl(var(--secondary))] border border-[hsl(var(--border))] text-[hsl(var(--foreground))] font-medium hover:bg-[hsl(var(--accent))] disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2.5"
+          >
+            {localLoading ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : (
+              <HardDrive className="h-5 w-5" />
+            )}
+            <span>本地模式</span>
+            <span className="text-xs text-[hsl(var(--muted-foreground))]">- 无需注册, 数据存储在本地</span>
+          </button>
+
+          <div className="relative my-6">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-[hsl(var(--border))]" />
+            </div>
+            <div className="relative flex justify-center text-xs">
+              <span className="px-3 bg-[hsl(var(--card))] text-[hsl(var(--muted-foreground))]">
+                或使用云端账号
+              </span>
+            </div>
+          </div>
+
           <form onSubmit={handleSubmit} className="space-y-5">
             {/* Username (register only) */}
             {mode === 'register' && (
@@ -163,6 +209,7 @@ export function AuthPage() {
               className="w-full h-12 rounded-xl bg-[hsl(var(--primary))] text-white font-medium hover:bg-[hsl(var(--primary)/0.9)] disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
             >
               {loading && <Loader2 className="h-5 w-5 animate-spin" />}
+              <Cloud className="h-5 w-5" />
               {mode === 'login' ? '登录' : '注册'}
             </button>
           </form>

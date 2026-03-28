@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { config } from './config/index.js';
 import { testSupabaseConnection } from './lib/supabase.js';
+import { getSqliteHealth } from './lib/sqlite.js';
 import authRoutes from './routes/auth.routes.js';
 import llmRoutes from './routes/llm.routes.js';
 import projectRoutes from './routes/project.routes.js';
@@ -21,10 +22,14 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // 健康检查
 app.get('/health', async (_req, res) => {
   const supabaseConnected = await testSupabaseConnection();
+  const sqlite = getSqliteHealth();
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
+    storage_provider: config.database.provider,
     supabase: supabaseConnected ? 'connected' : 'disconnected',
+    sqlite: sqlite.connected ? 'connected' : 'disconnected',
+    sqlite_path: sqlite.path,
   });
 });
 

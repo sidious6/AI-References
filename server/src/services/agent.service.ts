@@ -264,6 +264,16 @@ class AgentService {
           queries: [],
           logs: [],
           tempAssets: [],
+          parsedDirection: null,
+          projectMatches: [],
+          pendingProjectAction: null,
+          userConfirmation: null,
+          projectDocuments: [],
+          projectImages: [],
+          webSearchResults: [],
+          webSearchAnalysis: null,
+          latestRecords: [],
+          mergedRecords: [],
         },
       };
       const tree = buildDefaultScriptTree(session);
@@ -640,6 +650,16 @@ class AgentService {
         queries: [],
         logs: [],
         tempAssets: [],
+        parsedDirection: null,
+        projectMatches: [],
+        pendingProjectAction: null,
+        userConfirmation: null,
+        projectDocuments: [],
+        projectImages: [],
+        webSearchResults: [],
+        webSearchAnalysis: null,
+        latestRecords: [],
+        mergedRecords: [],
       },
     };
     
@@ -648,9 +668,7 @@ class AgentService {
     // 使用恢复模式执行
     for await (const ev of runScriptTree(tree, execCtx, { resumeMode: true })) {
       if (ev.type === 'final_result') {
-        for (const asset of ev.tempAssets) {
-          await tempAssetRepository.create(asset);
-        }
+        // 临时资产已在执行过程中实时保存，这里跳过重复创建
         await this.addMessage({
           session_id: sessionId,
           role: 'assistant',

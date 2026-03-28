@@ -24,7 +24,7 @@ export async function callWosApi({ ctx }: ToolInput): Promise<ToolResult> {
     return { output: [] };
   }
 
-  const queries: QueryItem[] = (ctx.state as any).queries || [];
+  const queries: QueryItem[] = ctx.state.queries || [];
   const allRecords: any[] = [];
   
   // 如果没有生成检索式，使用研究主题的英文翻译
@@ -158,10 +158,10 @@ export async function callWosApi({ ctx }: ToolInput): Promise<ToolResult> {
   ctx.state.logs.push(`WOS 返回 ${uniqueRecords.length} 条文献`);
   
   // 初始化或追加到 latestRecords
-  if (!(ctx.state as any).latestRecords) {
-    (ctx.state as any).latestRecords = [];
+  if (!ctx.state.latestRecords) {
+    ctx.state.latestRecords = [];
   }
-  (ctx.state as any).latestRecords.push(...uniqueRecords);
+  ctx.state.latestRecords.push(...uniqueRecords);
 
   return { output: uniqueRecords };
 }

@@ -3,7 +3,7 @@
  * 提供 LLM 调用和 Prompt 加载功能
  */
 import { llmService } from '../services/llm.service.js';
-import type { ChatMessage } from '../types/llm.js';
+import type { ChatMessage, LLMProvider } from '../types/llm.js';
 import { config } from '../config/index.js';
 import { PROMPTS, type PromptKey } from '../prompts/index.js';
 
@@ -23,6 +23,6 @@ export function getPrompt(key: PromptKey): string {
  * @returns LLM 响应
  */
 export async function callLLM(messages: ChatMessage[], model?: string) {
-  const provider = (config.llm.defaultProvider || 'ark') as any;
+  const provider = (config.llm.defaultProvider || 'ark') as LLMProvider;
   return llmService.chat(provider, { model, messages });
 }

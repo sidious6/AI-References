@@ -94,7 +94,7 @@ export async function callScopusApi({ ctx }: ToolInput): Promise<ToolResult> {
     console.log('[Scopus API] 已配置 insttoken，将获取完整数据（含摘要）');
   }
 
-  const queries: QueryItem[] = (ctx.state as any).queries || [];
+  const queries: QueryItem[] = ctx.state.queries || [];
   const allRecords: any[] = [];
   
   // 收集检索式
@@ -249,10 +249,10 @@ export async function callScopusApi({ ctx }: ToolInput): Promise<ToolResult> {
   ctx.state.logs.push(`Scopus 返回 ${uniqueRecords.length} 条文献（${totalWithAbstract} 条有摘要）`);
   
   // 初始化或追加到 latestRecords
-  if (!(ctx.state as any).latestRecords) {
-    (ctx.state as any).latestRecords = [];
+  if (!ctx.state.latestRecords) {
+    ctx.state.latestRecords = [];
   }
-  (ctx.state as any).latestRecords.push(...uniqueRecords);
+  ctx.state.latestRecords.push(...uniqueRecords);
   
   return { output: uniqueRecords };
 }

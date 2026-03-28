@@ -115,7 +115,7 @@ ${framework?.content || topic}
     jsonStr = cleanJsonString(jsonStr);
     
     const parsed = JSON.parse(jsonStr);
-    (ctx.state as any).queries = parsed;
+    ctx.state.queries = parsed;
     
     console.log(`[生成检索式] 成功生成 ${parsed.length} 条检索式`);
     parsed.forEach((q: any, i: number) => {
@@ -135,7 +135,7 @@ ${framework?.content || topic}
     
   } catch (err) {
     console.error('[生成检索式] JSON 解析失败:', err);
-    (ctx.state as any).queries = [];
+    ctx.state.queries = [];
   }
   
   return { output: res.content };

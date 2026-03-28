@@ -1,7 +1,10 @@
 import { v4 as uuidv4 } from 'uuid';
+import { AsyncLocalStorage } from 'async_hooks';
+import { config } from '../config/index.js';
 import { getSupabaseClient } from './supabase.js';
-import { readLocalDatabase, writeLocalDatabase, getLocalTable } from './local-storage.js';
+import { getSqliteDb } from './sqlite.js';
 import type {
+  User, CreateUser, UpdateUser,
   Project, CreateProject, UpdateProject,
   Chapter, CreateChapter, UpdateChapter,
   Literature, CreateLiterature, UpdateLiterature,
@@ -12,7 +15,32 @@ import type {
   Setting,
 } from '../types/database.js';
 
-type TableName = 'projects' | 'chapters' | 'literature' | 'documents' | 'agent_sessions' | 'agent_messages' | 'temp_assets' | 'settings';
+// 请求上下文: 用于在请求生命周期内标记当前用户, 以便 repository 动态路由
+interface RequestContext {
+  userId?: string;
+}
+
+export const requestContext = new AsyncLocalStorage<RequestContext>();
+
+// 判断当前请求是否应使用本地 SQLite 存储
+function shouldUseSqlite(): boolean {
+  if (STORAGE_PROVIDER === 'sqlite' || STORAGE_PROVIDER === 'local') {
+    return true;
+  }
+  const ctx = requestContext.getStore();
+  return ctx?.userId === 'local-user';
+}
+
+type TableName =
+  | 'users'
+  | 'projects'
+  | 'chapters'
+  | 'literature'
+  | 'documents'
+  | 'agent_sessions'
+  | 'agent_messages'
+  | 'temp_assets'
+  | 'settings';
 
 interface QueryOptions {
   orderBy?: { column: string; ascending?: boolean };
@@ -21,489 +49,426 @@ interface QueryOptions {
   filters?: Record<string, unknown>;
 }
 
-function shouldFallbackToLocal(error: unknown): boolean {
-  if (!error) return false;
-  const message = typeof error === 'string'
-    ? error.toLowerCase()
-    : (error as { message?: string }).message?.toLowerCase();
-  if (!message) return false;
-  const networkIndicators = [
-    'fetch failed', 
-    'network error', 
-    'timeout', 
-    'etimedout',
-    'cannot coerce',  // 记录不存在时的错误
-  ];
-  return networkIndicators.some(indicator => message.includes(indicator));
+interface Repository<T extends { id: string }> {
+  findAll(options?: QueryOptions): Promise<T[]>;
+  findById(id: string): Promise<T | null>;
+  create(data: Partial<T> & Record<string, unknown>): Promise<T>;
+  update(id: string, data: Partial<T>): Promise<T | null>;
+  delete(id: string): Promise<boolean>;
+  createMany(records: Array<Partial<T> & Record<string, unknown>>): Promise<T[]>;
+  deleteMany(filters: Record<string, unknown>): Promise<number>;
+  count(filters?: Record<string, unknown>): Promise<number>;
 }
 
-// 通用双写存储仓库
-class DualWriteRepository<T extends { id: string }> {
+const STORAGE_PROVIDER = (config.database.provider || 'supabase').toLowerCase();
+
+const JSON_COLUMNS: Partial<Record<TableName, string[]>> = {
+  projects: ['tags'],
+  literature: ['authors', 'keywords', 'raw_data'],
+  documents: ['metadata'],
+  agent_sessions: ['workflow_state'],
+  agent_messages: ['tool_calls', 'metadata'],
+  temp_assets: ['data'],
+  settings: ['value'],
+};
+
+function serializeValue(table: TableName, key: string, value: unknown): unknown {
+  if (value === undefined) return undefined;
+  if ((JSON_COLUMNS[table] || []).includes(key)) {
+    if (value === null) return null;
+    return JSON.stringify(value);
+  }
+  if (table === 'temp_assets' && key === 'synced_to_project') {
+    return value ? 1 : 0;
+  }
+  return value;
+}
+
+function deserializeValue(table: TableName, key: string, value: unknown): unknown {
+  if (value === undefined || value === null) {
+    if (table === 'temp_assets' && key === 'synced_to_project') return false;
+    return value;
+  }
+
+  if ((JSON_COLUMNS[table] || []).includes(key) && typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+
+  if (table === 'temp_assets' && key === 'synced_to_project') {
+    return value === 1 || value === true;
+  }
+
+  return value;
+}
+
+function serializeRecord(table: TableName, data: Record<string, unknown>): Record<string, unknown> {
+  const output: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(data)) {
+    const serialized = serializeValue(table, key, value);
+    if (serialized !== undefined) output[key] = serialized;
+  }
+  return output;
+}
+
+function deserializeRecord<T>(table: TableName, data: Record<string, unknown>): T {
+  const output: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(data)) {
+    output[key] = deserializeValue(table, key, value);
+  }
+  return output as T;
+}
+
+function buildWhere(filters?: Record<string, unknown>): { clause: string; values: unknown[] } {
+  if (!filters || Object.keys(filters).length === 0) {
+    return { clause: '', values: [] };
+  }
+
+  const clauses: string[] = [];
+  const values: unknown[] = [];
+
+  for (const [key, value] of Object.entries(filters)) {
+    if (value === undefined) continue;
+    if (value === null) {
+      clauses.push(`${key} IS NULL`);
+    } else {
+      clauses.push(`${key} = ?`);
+      values.push(value);
+    }
+  }
+
+  if (clauses.length === 0) return { clause: '', values: [] };
+  return { clause: `WHERE ${clauses.join(' AND ')}`, values };
+}
+
+class SupabaseRepository<T extends { id: string }> implements Repository<T> {
   constructor(private tableName: TableName) {}
 
-  // 读取：优先 Supabase，失败降级本地
+  private client() {
+    const client = getSupabaseClient();
+    if (!client) {
+      throw new Error('Supabase 未启用或配置缺失（当前存储模式不是 supabase）');
+    }
+    return client;
+  }
+
   async findAll(options?: QueryOptions): Promise<T[]> {
-    const supabase = getSupabaseClient();
-    
-    if (supabase) {
-      try {
-        let query = supabase.from(this.tableName).select('*');
-        
-        if (options?.filters) {
-          for (const [key, value] of Object.entries(options.filters)) {
-            if (value !== undefined && value !== null) {
-              query = query.eq(key, value);
-            }
-          }
+    let query = this.client().from(this.tableName).select('*');
+
+    if (options?.filters) {
+      for (const [key, value] of Object.entries(options.filters)) {
+        if (value !== undefined && value !== null) {
+          query = query.eq(key, value);
         }
-        
-        if (options?.orderBy) {
-          query = query.order(options.orderBy.column, { ascending: options.orderBy.ascending ?? true });
-        }
-        
-        if (options?.limit) {
-          query = query.limit(options.limit);
-        }
-        
-        if (options?.offset) {
-          query = query.range(options.offset, options.offset + (options.limit || 100) - 1);
-        }
-        
-        const { data, error } = await query;
-        
-        if (!error && data) {
-          return data as T[];
-        }
-        console.warn(`Supabase query failed for ${this.tableName}, falling back to local:`, error?.message);
-      } catch (err) {
-        console.warn(`Supabase error for ${this.tableName}, falling back to local:`, err);
       }
     }
-    
-    // 降级到本地
-    let items = (await getLocalTable(this.tableName)) as unknown as T[];
-    
-    if (options?.filters) {
-      items = items.filter(item => {
-        for (const [key, value] of Object.entries(options.filters!)) {
-          if (value !== undefined && value !== null && (item as Record<string, unknown>)[key] !== value) {
-            return false;
-          }
-        }
-        return true;
-      });
-    }
-    
+
     if (options?.orderBy) {
-      const { column, ascending = true } = options.orderBy;
-      items.sort((a, b) => {
-        const aVal = (a as Record<string, unknown>)[column] as string | number;
-        const bVal = (b as Record<string, unknown>)[column] as string | number;
-        if (aVal < bVal) return ascending ? -1 : 1;
-        if (aVal > bVal) return ascending ? 1 : -1;
-        return 0;
-      });
+      query = query.order(options.orderBy.column, { ascending: options.orderBy.ascending ?? true });
     }
-    
-    if (options?.offset) {
-      items = items.slice(options.offset);
+
+    if (options?.offset !== undefined) {
+      if (options.limit !== undefined) {
+        query = query.range(options.offset, options.offset + options.limit - 1);
+      } else {
+        query = query.range(options.offset, options.offset + 9999);
+      }
+    } else if (options?.limit !== undefined) {
+      query = query.limit(options.limit);
     }
-    
-    if (options?.limit) {
-      items = items.slice(0, options.limit);
-    }
-    
-    return items;
+
+    const { data, error } = await query;
+    if (error) throw new Error(`Supabase query failed(${this.tableName}): ${error.message}`);
+    return ((data || []) as Record<string, unknown>[]).map((row) => deserializeRecord<T>(this.tableName, row));
   }
 
   async findById(id: string): Promise<T | null> {
-    const supabase = getSupabaseClient();
-    
-    if (supabase) {
-      try {
-        const { data, error } = await supabase
-          .from(this.tableName)
-          .select('*')
-          .eq('id', id)
-          .single();
-        
-        if (!error && data) {
-          return data as T;
-        }
-      } catch (err) {
-        console.warn(`Supabase findById failed for ${this.tableName}, falling back to local:`, err);
-      }
-    }
-    
-    const items = (await getLocalTable(this.tableName)) as unknown as T[];
-    return items.find(item => item.id === id) || null;
+    const { data, error } = await this.client()
+      .from(this.tableName)
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error) throw new Error(`Supabase findById failed(${this.tableName}): ${error.message}`);
+    return data ? deserializeRecord<T>(this.tableName, data as Record<string, unknown>) : null;
   }
 
-  // 创建：先写 Supabase，成功后同步本地
   async create(data: Partial<T> & Record<string, unknown>): Promise<T> {
-    const id = uuidv4();
     const now = new Date().toISOString();
-    const record = {
-      ...data,
-      id,
+    const payload = serializeRecord(this.tableName, {
+      id: uuidv4(),
       created_at: now,
       updated_at: now,
-    } as unknown as T;
+      ...data,
+    });
 
-    const supabase = getSupabaseClient();
-    
-    if (supabase) {
-      try {
-        const { data: created, error } = await supabase
-          .from(this.tableName)
-          .insert(record)
-          .select()
-          .single();
-        
-        if (error) {
-          if (!shouldFallbackToLocal(error.message)) {
-            throw new Error(`Supabase insert failed: ${error.message}`);
-          }
-          console.warn(`Supabase insert failed for ${this.tableName}, falling back to local:`, error.message);
-        } else if (created) {
-          await this.syncToLocal(created as T);
-          return created as T;
-        }
-      } catch (err) {
-        if (!shouldFallbackToLocal(err)) {
-          console.error(`Failed to create in Supabase for ${this.tableName}:`, err);
-          throw err;
-        }
-        console.warn(`Supabase create error for ${this.tableName}, falling back to local:`, err);
-      }
+    const { data: created, error } = await this.client()
+      .from(this.tableName)
+      .insert(payload)
+      .select()
+      .single();
+
+    if (error || !created) {
+      throw new Error(`Supabase create failed(${this.tableName}): ${error?.message || 'unknown'}`);
     }
-    
-    // 降级到本地
-    await this.syncToLocal(record);
-    return record;
+
+    return deserializeRecord<T>(this.tableName, created as Record<string, unknown>);
   }
 
-  // 更新：先写 Supabase，成功后同步本地
   async update(id: string, data: Partial<T>): Promise<T | null> {
-    const now = new Date().toISOString();
-    const updateData = { ...data, updated_at: now };
-    delete (updateData as Record<string, unknown>).id;
-    delete (updateData as Record<string, unknown>).created_at;
+    const payload = serializeRecord(this.tableName, {
+      ...data,
+      updated_at: new Date().toISOString(),
+    });
 
-    const supabase = getSupabaseClient();
-    
-    if (supabase) {
-      try {
-        const { data: updated, error } = await supabase
-          .from(this.tableName)
-          .update(updateData)
-          .eq('id', id)
-          .select()
-          .single();
-        
-        if (error) {
-          if (!shouldFallbackToLocal(error.message)) {
-            throw new Error(`Supabase update failed: ${error.message}`);
-          }
-          console.warn(`Supabase update failed for ${this.tableName}, falling back to local:`, error.message);
-        } else if (updated) {
-          await this.updateLocal(id, updated as T);
-          return updated as T;
-        }
-      } catch (err) {
-        if (!shouldFallbackToLocal(err)) {
-          console.error(`Failed to update in Supabase for ${this.tableName}:`, err);
-          throw err;
-        }
-        console.warn(`Supabase update error for ${this.tableName}, falling back to local:`, err);
-      }
-    }
-    
-    // 降级到本地
-    return this.updateLocal(id, updateData as Partial<T>);
+    delete (payload as Record<string, unknown>).id;
+    delete (payload as Record<string, unknown>).created_at;
+
+    const { data: updated, error } = await this.client()
+      .from(this.tableName)
+      .update(payload)
+      .eq('id', id)
+      .select()
+      .maybeSingle();
+
+    if (error) throw new Error(`Supabase update failed(${this.tableName}): ${error.message}`);
+    return updated ? deserializeRecord<T>(this.tableName, updated as Record<string, unknown>) : null;
   }
 
-  // 删除：先删 Supabase，成功后同步本地
   async delete(id: string): Promise<boolean> {
-    const supabase = getSupabaseClient();
-    
-    if (supabase) {
-      try {
-        const { error } = await supabase
-          .from(this.tableName)
-          .delete()
-          .eq('id', id);
-        
-        if (error) {
-          if (!shouldFallbackToLocal(error.message)) {
-            throw new Error(`Supabase delete failed: ${error.message}`);
-          }
-          console.warn(`Supabase delete failed for ${this.tableName}, falling back to local:`, error.message);
-        } else {
-          await this.deleteLocal(id);
-          return true;
-        }
-      } catch (err) {
-        if (!shouldFallbackToLocal(err)) {
-          console.error(`Failed to delete in Supabase for ${this.tableName}:`, err);
-          throw err;
-        }
-        console.warn(`Supabase delete error for ${this.tableName}, falling back to local:`, err);
-      }
-    }
-    
-    // 降级到本地
-    await this.deleteLocal(id);
+    const { error } = await this.client().from(this.tableName).delete().eq('id', id);
+    if (error) throw new Error(`Supabase delete failed(${this.tableName}): ${error.message}`);
     return true;
   }
 
-  // 本地同步方法
-  private async syncToLocal(record: T): Promise<void> {
-    const db = await readLocalDatabase();
-    const items = db[this.tableName] as unknown as T[];
-    const existingIndex = items.findIndex(item => item.id === record.id);
-    
-    if (existingIndex >= 0) {
-      items[existingIndex] = record;
-    } else {
-      items.push(record);
-    }
-    
-    await writeLocalDatabase(db);
-  }
-
-  private async updateLocal(id: string, data: Partial<T>): Promise<T | null> {
-    const db = await readLocalDatabase();
-    const items = db[this.tableName] as unknown as T[];
-    const index = items.findIndex(item => item.id === id);
-    
-    if (index < 0) return null;
-    
-    items[index] = { ...items[index], ...data };
-    await writeLocalDatabase(db);
-    return items[index];
-  }
-
-  private async deleteLocal(id: string): Promise<void> {
-    const db = await readLocalDatabase();
-    const items = db[this.tableName] as unknown as T[];
-    const index = items.findIndex(item => item.id === id);
-    
-    if (index >= 0) {
-      items.splice(index, 1);
-      await writeLocalDatabase(db);
-    }
-  }
-
-  // 批量操作
   async createMany(records: Array<Partial<T> & Record<string, unknown>>): Promise<T[]> {
-    const results: T[] = [];
-    for (const record of records) {
-      results.push(await this.create(record));
-    }
-    return results;
+    if (records.length === 0) return [];
+    const now = new Date().toISOString();
+    const payload = records.map((record) => serializeRecord(this.tableName, {
+      ...record,
+      id: uuidv4(),
+      created_at: now,
+      updated_at: now,
+    }));
+
+    const { data, error } = await this.client().from(this.tableName).insert(payload).select();
+    if (error) throw new Error(`Supabase createMany failed(${this.tableName}): ${error.message}`);
+    return ((data || []) as Record<string, unknown>[]).map((row) => deserializeRecord<T>(this.tableName, row));
   }
 
-  // 批量删除 - 按条件
   async deleteMany(filters: Record<string, unknown>): Promise<number> {
-    const supabase = getSupabaseClient();
-    let deletedCount = 0;
-    
-    if (supabase) {
-      try {
-        let query = supabase.from(this.tableName).delete();
-        
-        for (const [key, value] of Object.entries(filters)) {
-          if (value !== undefined && value !== null) {
-            query = query.eq(key, value);
-          }
-        }
-        
-        const { error, count } = await query.select('id');
-        
-        if (error) {
-          if (!shouldFallbackToLocal(error.message)) {
-            throw new Error(`Supabase deleteMany failed: ${error.message}`);
-          }
-          console.warn(`Supabase deleteMany failed for ${this.tableName}, falling back to local:`, error.message);
-        } else {
-          deletedCount = count || 0;
-          // 同步删除本地数据
-          await this.deleteManyLocal(filters);
-          return deletedCount;
-        }
-      } catch (err) {
-        if (!shouldFallbackToLocal(err)) {
-          console.error(`Failed to deleteMany in Supabase for ${this.tableName}:`, err);
-          throw err;
-        }
-        console.warn(`Supabase deleteMany error for ${this.tableName}, falling back to local:`, err);
-      }
-    }
-    
-    // 降级到本地
-    return this.deleteManyLocal(filters);
-  }
+    const rows = await this.findAll({ filters });
+    if (rows.length === 0) return 0;
 
-  // 本地批量删除
-  private async deleteManyLocal(filters: Record<string, unknown>): Promise<number> {
-    const db = await readLocalDatabase();
-    const items = db[this.tableName] as unknown as T[];
-    const originalLength = items.length;
-    
-    const remaining = items.filter(item => {
-      for (const [key, value] of Object.entries(filters)) {
-        if (value !== undefined && value !== null && (item as Record<string, unknown>)[key] === value) {
-          return false;
-        }
-      }
-      return true;
-    });
-    
-    (db[this.tableName] as unknown as T[]).length = 0;
-    (db[this.tableName] as unknown as T[]).push(...remaining);
-    await writeLocalDatabase(db);
-    
-    return originalLength - remaining.length;
+    for (const row of rows) {
+      await this.delete(row.id);
+    }
+
+    return rows.length;
   }
 
   async count(filters?: Record<string, unknown>): Promise<number> {
-    const supabase = getSupabaseClient();
-    
-    if (supabase) {
-      try {
-        let query = supabase.from(this.tableName).select('*', { count: 'exact', head: true });
-        
-        if (filters) {
-          for (const [key, value] of Object.entries(filters)) {
-            if (value !== undefined && value !== null) {
-              query = query.eq(key, value);
-            }
-          }
-        }
-        
-        const { count, error } = await query;
-        
-        if (!error && count !== null) {
-          return count;
-        }
-      } catch (err) {
-        console.warn(`Supabase count failed for ${this.tableName}, falling back to local:`, err);
+    let query = this.client().from(this.tableName).select('*', { count: 'exact', head: true });
+    if (filters) {
+      for (const [key, value] of Object.entries(filters)) {
+        if (value !== undefined && value !== null) query = query.eq(key, value);
       }
     }
-    
-    const items = await this.findAll({ filters });
-    return items.length;
+
+    const { count, error } = await query;
+    if (error) throw new Error(`Supabase count failed(${this.tableName}): ${error.message}`);
+    return count || 0;
   }
 }
 
-// 导出各表的仓库实例
-export const projectRepository = new DualWriteRepository<Project>('projects');
-export const chapterRepository = new DualWriteRepository<Chapter>('chapters');
-export const literatureRepository = new DualWriteRepository<Literature>('literature');
-export const documentRepository = new DualWriteRepository<Document>('documents');
-export const agentSessionRepository = new DualWriteRepository<AgentSession>('agent_sessions');
-export const agentMessageRepository = new DualWriteRepository<AgentMessage>('agent_messages');
-export const tempAssetRepository = new DualWriteRepository<TempAsset>('temp_assets');
-export const settingRepository = new DualWriteRepository<Setting>('settings');
+export class SqliteRepository<T extends { id: string }> implements Repository<T> {
+  constructor(private tableName: TableName) {}
 
-// 设置专用方法
-export async function getSetting(category: string, key: string): Promise<unknown> {
-  const supabase = getSupabaseClient();
-  
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('settings')
-        .select('value')
-        .eq('category', category)
-        .eq('key', key)
-        .single();
-      
-      if (!error && data) {
-        return data.value;
-      }
-    } catch {
-      // 降级到本地
-    }
+  async findAll(options?: QueryOptions): Promise<T[]> {
+    const db = getSqliteDb();
+    const { clause, values } = buildWhere(options?.filters);
+
+    const orderClause = options?.orderBy
+      ? `ORDER BY ${options.orderBy.column} ${(options.orderBy.ascending ?? true) ? 'ASC' : 'DESC'}`
+      : '';
+
+    const limitClause = options?.limit !== undefined ? `LIMIT ${options.limit}` : '';
+    const offsetClause = options?.offset !== undefined ? `OFFSET ${options.offset}` : '';
+
+    const sql = `SELECT * FROM ${this.tableName} ${clause} ${orderClause} ${limitClause} ${offsetClause}`.trim();
+    const rows = db.prepare(sql).all(...values) as Record<string, unknown>[];
+    return rows.map((row) => deserializeRecord<T>(this.tableName, row));
   }
-  
-  const settings = await getLocalTable('settings');
-  const setting = settings.find(s => s.category === category && s.key === key);
-  return setting?.value;
+
+  async findById(id: string): Promise<T | null> {
+    const db = getSqliteDb();
+    const row = db.prepare(`SELECT * FROM ${this.tableName} WHERE id = ? LIMIT 1`).get(id) as Record<string, unknown> | undefined;
+    return row ? deserializeRecord<T>(this.tableName, row) : null;
+  }
+
+  async create(data: Partial<T> & Record<string, unknown>): Promise<T> {
+    const db = getSqliteDb();
+    const now = new Date().toISOString();
+    const record = serializeRecord(this.tableName, {
+      id: uuidv4(),
+      created_at: now,
+      updated_at: now,
+      ...data,
+    });
+
+    const columns = Object.keys(record);
+    const placeholders = columns.map(() => '?').join(', ');
+    const values = columns.map((key) => record[key]);
+
+    db.prepare(`INSERT INTO ${this.tableName} (${columns.join(', ')}) VALUES (${placeholders})`).run(...values);
+
+    return deserializeRecord<T>(this.tableName, record);
+  }
+
+  async update(id: string, data: Partial<T>): Promise<T | null> {
+    const db = getSqliteDb();
+    const payload = serializeRecord(this.tableName, {
+      ...data,
+      updated_at: new Date().toISOString(),
+    });
+
+    delete (payload as Record<string, unknown>).id;
+    delete (payload as Record<string, unknown>).created_at;
+
+    const keys = Object.keys(payload);
+    if (keys.length === 0) return this.findById(id);
+
+    const setClause = keys.map((key) => `${key} = ?`).join(', ');
+    const values = keys.map((key) => payload[key]);
+
+    const result = db.prepare(`UPDATE ${this.tableName} SET ${setClause} WHERE id = ?`).run(...values, id);
+    if (result.changes === 0) return null;
+
+    return this.findById(id);
+  }
+
+  async delete(id: string): Promise<boolean> {
+    const db = getSqliteDb();
+    const result = db.prepare(`DELETE FROM ${this.tableName} WHERE id = ?`).run(id);
+    return result.changes > 0;
+  }
+
+  async createMany(records: Array<Partial<T> & Record<string, unknown>>): Promise<T[]> {
+    const output: T[] = [];
+    for (const record of records) {
+      output.push(await this.create(record));
+    }
+    return output;
+  }
+
+  async deleteMany(filters: Record<string, unknown>): Promise<number> {
+    const db = getSqliteDb();
+    const { clause, values } = buildWhere(filters);
+    const sql = `DELETE FROM ${this.tableName} ${clause}`.trim();
+    const result = db.prepare(sql).run(...values);
+    return result.changes;
+  }
+
+  async count(filters?: Record<string, unknown>): Promise<number> {
+    const db = getSqliteDb();
+    const { clause, values } = buildWhere(filters);
+    const row = db.prepare(`SELECT COUNT(1) as count FROM ${this.tableName} ${clause}`.trim()).get(...values) as { count: number };
+    return row?.count || 0;
+  }
+}
+
+// DynamicRepository: 根据请求上下文动态路由到 SQLite 或 Supabase
+class DynamicRepository<T extends { id: string }> implements Repository<T> {
+  private sqlite: SqliteRepository<T>;
+  private supabase: SupabaseRepository<T>;
+
+  constructor(tableName: TableName) {
+    this.sqlite = new SqliteRepository<T>(tableName);
+    this.supabase = new SupabaseRepository<T>(tableName);
+  }
+
+  private get repo(): Repository<T> {
+    return shouldUseSqlite() ? this.sqlite : this.supabase;
+  }
+
+  findAll(options?: QueryOptions) { return this.repo.findAll(options); }
+  findById(id: string) { return this.repo.findById(id); }
+  create(data: Partial<T> & Record<string, unknown>) { return this.repo.create(data); }
+  update(id: string, data: Partial<T>) { return this.repo.update(id, data); }
+  delete(id: string) { return this.repo.delete(id); }
+  createMany(records: Array<Partial<T> & Record<string, unknown>>) { return this.repo.createMany(records); }
+  deleteMany(filters: Record<string, unknown>) { return this.repo.deleteMany(filters); }
+  count(filters?: Record<string, unknown>) { return this.repo.count(filters); }
+}
+
+function createRepository<T extends { id: string }>(tableName: TableName): Repository<T> {
+  // 始终创建 DynamicRepository, 运行时根据上下文路由
+  return new DynamicRepository<T>(tableName);
+}
+
+export const userRepository = createRepository<User>('users');
+export const projectRepository = createRepository<Project>('projects');
+export const chapterRepository = createRepository<Chapter>('chapters');
+export const literatureRepository = createRepository<Literature>('literature');
+export const documentRepository = createRepository<Document>('documents');
+export const agentSessionRepository = createRepository<AgentSession>('agent_sessions');
+export const agentMessageRepository = createRepository<AgentMessage>('agent_messages');
+export const tempAssetRepository = createRepository<TempAsset>('temp_assets');
+export const settingRepository = createRepository<Setting>('settings');
+
+export async function getSetting(category: string, key: string): Promise<unknown> {
+  const rows = await settingRepository.findAll({
+    filters: { category, key },
+    limit: 1,
+  });
+  return rows[0]?.value;
 }
 
 export async function setSetting(category: string, key: string, value: unknown, description?: string): Promise<void> {
-  const supabase = getSupabaseClient();
   const now = new Date().toISOString();
-  
-  if (supabase) {
-    const { error } = await supabase
-      .from('settings')
-      .upsert({
-        category,
-        key,
-        value,
-        description,
-        updated_at: now,
-      }, {
-        onConflict: 'category,key',
-      });
-    
-    if (error) {
-      throw new Error(`Failed to save setting: ${error.message}`);
-    }
+  const rows = await settingRepository.findAll({
+    filters: { category, key },
+    limit: 1,
+  });
+
+  if (rows.length > 0) {
+    await settingRepository.update(rows[0].id, {
+      value,
+      description: description || rows[0].description,
+      updated_at: now,
+    } as Partial<Setting>);
+    return;
   }
-  
-  // 同步到本地
-  const db = await readLocalDatabase();
-  const index = db.settings.findIndex(s => s.category === category && s.key === key);
-  
-  const setting: Setting = {
-    id: index >= 0 ? db.settings[index].id : uuidv4(),
+
+  await settingRepository.create({
     category,
     key,
     value,
     description: description || null,
-    created_at: index >= 0 ? db.settings[index].created_at : now,
+    created_at: now,
     updated_at: now,
-  };
-  
-  if (index >= 0) {
-    db.settings[index] = setting;
-  } else {
-    db.settings.push(setting);
-  }
-  
-  await writeLocalDatabase(db);
+  } as Partial<Setting> & Record<string, unknown>);
 }
 
 export async function getSettingsByCategory(category: string): Promise<Record<string, unknown>> {
-  const supabase = getSupabaseClient();
-  
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('settings')
-        .select('key, value')
-        .eq('category', category);
-      
-      if (!error && data) {
-        return data.reduce((acc, item) => {
-          acc[item.key] = item.value;
-          return acc;
-        }, {} as Record<string, unknown>);
-      }
-    } catch {
-      // 降级到本地
-    }
-  }
-  
-  const settings = await getLocalTable('settings');
-  return settings
-    .filter(s => s.category === category)
-    .reduce((acc, item) => {
-      acc[item.key] = item.value;
-      return acc;
-    }, {} as Record<string, unknown>);
+  const rows = await settingRepository.findAll({ filters: { category } });
+  return rows.reduce((acc, row) => {
+    acc[row.key] = row.value;
+    return acc;
+  }, {} as Record<string, unknown>);
 }
+
+export type {
+  User, CreateUser, UpdateUser,
+  Project, CreateProject, UpdateProject,
+  Chapter, CreateChapter, UpdateChapter,
+  Literature, CreateLiterature, UpdateLiterature,
+  Document, CreateDocument, UpdateDocument,
+  AgentSession, CreateAgentSession, UpdateAgentSession,
+  AgentMessage, CreateAgentMessage,
+  TempAsset, CreateTempAsset, UpdateTempAsset,
+  Setting,
+};

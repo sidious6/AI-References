@@ -6,21 +6,7 @@
 import type { ToolInput, ToolResult } from '../types.js';
 import { callLLM, getPrompt } from '../utils.js';
 import type { ChatMessage } from '../../types/llm.js';
-
-interface LiteratureRecord {
-  id: string;
-  title: string;
-  authors?: string[];
-  year?: number;
-  abstract?: string;
-  keywords?: string[];
-  source?: string;
-  journal?: string;
-  doi?: string;
-  status?: string;
-  screening_reason?: string;
-  relevant_section?: string;
-}
+import type { LiteratureRecord } from '../../services/deepreference/recode.types.js';
 
 interface ScreeningResult {
   id: string;
@@ -33,7 +19,7 @@ interface ScreeningResult {
 const BATCH_SIZE = 15;
 
 export async function fineScreening({ ctx }: ToolInput): Promise<ToolResult> {
-  const records: LiteratureRecord[] = (ctx.state as any).mergedRecords || [];
+  const records: LiteratureRecord[] = ctx.state.mergedRecords || [];
   
   if (records.length === 0) {
     console.log('[精筛] 无候选文献，跳过');
@@ -48,7 +34,7 @@ export async function fineScreening({ ctx }: ToolInput): Promise<ToolResult> {
   
   if (candidates.length === 0) {
     console.log('[精筛] 无待精筛文献，跳过LLM筛选');
-    (ctx.state as any).mergedRecords = records;
+    ctx.state.mergedRecords = records;
     return { 
       output: { 
         total: records.length,
@@ -84,9 +70,10 @@ export async function fineScreening({ ctx }: ToolInput): Promise<ToolResult> {
     
     console.log(`[精筛] 处理第 ${batchIndex + 1}/${totalBatches} 批 (${batch.length} 篇)`);
     
-    // 简化文献数据
-    const simplifiedRecords = batch.map(r => ({
-      id: r.id,
+    // 简化文献数据，使用合成索引 idx_N 作为稳定标识符
+    // (LiteratureRecord.id 是可选的，WOS/Scopus 记录通常为 undefined)
+    const simplifiedRecords = batch.map((r, i) => ({
+      id: `idx_${start + i}`,
       title: r.title,
       authors: r.authors?.slice(0, 3)?.join(', ') || '未知',
       year: r.year || '未知',
@@ -138,7 +125,19 @@ ${JSON.stringify(simplifiedRecords, null, 2)}`;
       
       if (screeningResults.length > 0) {
         for (const result of screeningResults) {
-          const record = records.find(r => r.id === result.id);
+          // 用合成索引 idx_N 匹配回 candidates 数组中的记录
+          let record: LiteratureRecord | undefined;
+          if (result.id.startsWith('idx_')) {
+            const idx = parseInt(result.id.replace('idx_', ''), 10);
+            if (!isNaN(idx) && idx >= 0 && idx < candidates.length) {
+              record = candidates[idx];
+            }
+          }
+          // 降级：按标题模糊匹配
+          if (!record) {
+            const normalizedTitle = result.id.toLowerCase().trim();
+            record = candidates.find(r => r.title.toLowerCase().trim() === normalizedTitle);
+          }
           if (record) {
             if (result.decision === 'keep') {
               record.status = 'approved';
@@ -174,7 +173,7 @@ ${JSON.stringify(simplifiedRecords, null, 2)}`;
     }
   }
   
-  (ctx.state as any).mergedRecords = records;
+  ctx.state.mergedRecords = records;
   
   const approved = records.filter(r => r.status === 'approved').length;
   const rejected = records.filter(r => r.status === 'rejected').length;

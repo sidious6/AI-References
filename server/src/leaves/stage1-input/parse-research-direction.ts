@@ -1,10 +1,11 @@
 /**
  * 解析研究方向
- * 从用户输入中提取研究主题、关键词、领域等结构化信息
+ * 从用户输入中提取研究主题、关键词、领域等结构化信息，写入 ctx.state
  */
 import type { ToolInput, ToolResult } from '../types.js';
 import { callLLM, getPrompt } from '../utils.js';
 import type { ChatMessage } from '../../types/llm.js';
+import type { ParsedDirection } from '../../services/deepreference/recode.types.js';
 
 export async function parseResearchDirection({ ctx }: ToolInput): Promise<ToolResult> {
   const topic = ctx.session.research_topic || '';
@@ -16,6 +17,27 @@ export async function parseResearchDirection({ ctx }: ToolInput): Promise<ToolRe
   ];
   
   const res = await callLLM(messages);
-  ctx.state.logs.push(res.content);
-  return { output: res.content };
+
+  // 尝试解析 LLM 返回的 JSON 结构
+  let parsed: ParsedDirection = {};
+  try {
+    const jsonMatch = res.content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const raw = JSON.parse(jsonMatch[0]);
+      parsed = {
+        research_topic: raw.research_topic || topic,
+        keywords: Array.isArray(raw.keywords) ? raw.keywords : [],
+        domain: raw.domain || undefined,
+        constraints: raw.constraints || undefined,
+      };
+    }
+  } catch {
+    console.warn('[parseResearchDirection] LLM 返回非 JSON，使用原始输入');
+    parsed = { research_topic: topic, keywords: [], domain: undefined };
+  }
+
+  ctx.state.parsedDirection = parsed;
+  ctx.state.logs.push(`解析研究方向: ${parsed.research_topic || topic}, 关键词: ${(parsed.keywords || []).join(', ')}`);
+
+  return { output: parsed };
 }

@@ -1,13 +1,15 @@
 /**
  * 生成参考文献列表
- * 按学术格式生成完整的参考文献列表
+ * 按学术格式生成完整的参考文献列表，排除已拒绝文献
  */
 import type { ToolInput, ToolResult } from '../types.js';
+import type { LiteratureRecord } from '../../services/deepreference/recode.types.js';
 
 export async function generateReferences({ ctx }: ToolInput): Promise<ToolResult> {
-  const records = (ctx.state as any).mergedRecords || [];
+  const records: LiteratureRecord[] = (ctx.state.mergedRecords || [])
+    .filter(r => r.status !== 'rejected');
   
-  const refs = records.map((r: any, idx: number) => {
+  const refs = records.map((r, idx) => {
     const authors = r.authors?.join(', ') || '';
     const year = r.year || 'n.d.';
     const title = r.title || '';

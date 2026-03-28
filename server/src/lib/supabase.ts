@@ -4,9 +4,13 @@ import { config } from '../config/index.js';
 let supabaseClient: SupabaseClient | null = null;
 
 export function getSupabaseClient(): SupabaseClient | null {
+  if (config.database.provider !== 'supabase') {
+    return null;
+  }
+
   const supabaseKey = config.database.supabaseServiceRoleKey || config.database.supabaseAnonKey;
   if (!config.database.supabaseUrl || !supabaseKey) {
-    console.warn('Supabase configuration missing, running in local-only mode');
+    console.warn('Supabase configuration missing');
     return null;
   }
 
