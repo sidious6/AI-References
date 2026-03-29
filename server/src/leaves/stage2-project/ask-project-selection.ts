@@ -21,7 +21,7 @@ async function llmMatchProject(
   candidates: ProjectCandidate[]
 ): Promise<LLMMatchResult | null> {
   try {
-    const providers = llmService.getAvailableProviders();
+    const providers = await llmService.getAvailableProviders();
     if (providers.length === 0) {
       console.log('[项目匹配] 无可用 LLM，跳过语义分析');
       return null;

@@ -12,13 +12,72 @@
   </p>
 
   <p>
-    <a href="#-产品亮点">产品亮点</a> •
-    <a href="#-快速开始">快速开始</a> •
-    <a href="#-核心功能">核心功能</a> •
-    <a href="#-部署模式">部署模式</a> •
-    <a href="#-技术栈">技术栈</a>
+    <a href="#快速开始">快速开始</a> •
+    <a href="#产品亮点">产品亮点</a> •
+    <a href="#核心功能">核心功能</a> •
+    <a href="#进阶配置">进阶配置</a> •
+    <a href="#技术栈">技术栈</a>
   </p>
 </div>
+
+---
+
+## 快速开始
+
+只需 **2 步**，无需配置数据库、无需注册账号。
+
+### 环境要求
+
+- [Node.js](https://nodejs.org/) 18 ~ 22（推荐 20 LTS）
+- 一个 AI 模型的 API Key（任选其一：DeepSeek、OpenAI、Claude、Gemini、通义千问等）
+
+> 使用 [nvm](https://github.com/nvm-sh/nvm) 的用户可直接 `nvm use`，项目已包含 `.nvmrc`。
+
+### 第 1 步：克隆并安装
+
+```bash
+git clone https://github.com/sidious6/AI-References.git
+cd AI-References
+npm install
+```
+
+安装过程**无需 Python、无需 C++ 编译器**，所有依赖均为纯 JavaScript/WASM。
+
+### 第 2 步：配置 API Key 并启动
+
+首次启动时，`.env` 文件会从 `.env.example` **自动创建**，你只需要编辑它：
+
+```bash
+# 打开 .env，填入你的 API Key（至少填一个）
+# 默认已是本地模式（STORAGE_PROVIDER=sqlite），无需修改其他配置
+
+# 启动
+npm run dev
+```
+
+`.env` 文件中需要关注的配置：
+
+```env
+# 存储模式（默认 sqlite，无需改动）
+STORAGE_PROVIDER=sqlite
+
+# 填入你的 AI 模型 API Key（至少配置一个即可使用）
+# 方式 A：火山引擎 / DeepSeek
+ARK_API_KEY=your_key_here
+
+# 方式 B：OpenAI
+OPENAI_API_KEY=your_key_here
+
+# 方式 C：其他模型可在启动后通过「设置 > 模型配置」页面添加
+```
+
+### 开始使用
+
+打开浏览器访问 **http://localhost:5173**
+
+- 点击登录页的 **「本地模式」** 按钮直接进入，无需注册
+- 进入后在「设置 > 模型配置」中可以测试连接、切换模型
+- 在「Agent」页面输入你的研究方向，AI 将自动完成从检索到综述的全流程
 
 ---
 
@@ -26,123 +85,12 @@
 
 > 一站式 AI 科研助手，覆盖「研究方向 -> 文献检索 -> 综述撰写」全流程
 
-传统科研写作痛点：
-- 文献检索耗时，筛选效率低
-- 综述撰写重复劳动多
-- 引用管理混乱，格式调整繁琐
-
-**AI-References 的解决方案：**
-
 | 痛点 | 解决方案 |
 |------|----------|
 | 文献检索慢 | AI 智能检索 + 多源聚合（Web of Science、Scopus） |
 | 筛选效率低 | 自动摘要 + 相关性评分 + 批量处理 |
 | 综述难写 | Agent 自动生成文献综述，支持引用插入 |
 | 管理混乱 | 项目化知识库，文献/文档/章节结构化管理 |
-
----
-
-## 快速开始
-
-### 环境要求
-
-- Node.js >= 18.0.0
-- 一个 AI 模型的 API Key（支持 DeepSeek、OpenAI、Claude、Gemini 等）
-
-### 方式一：本地模式（推荐，3 步开始）
-
-本地模式使用 SQLite 存储数据，**无需注册账号、无需配置数据库**，开箱即用。
-
-```bash
-# 1. 克隆并安装
-git clone https://github.com/your-username/AI-References.git
-cd AI-References && npm install
-
-# 2. 配置环境变量
-cp .env.example .env
-```
-
-编辑 `.env` 文件，只需修改以下配置即可启动：
-
-```env
-# 切换为本地模式
-STORAGE_PROVIDER=sqlite
-
-# 填入你的 AI 模型 API Key（至少配置一个）
-ARK_API_KEY=your_api_key_here
-```
-
-```bash
-# 3. 启动
-npm run dev
-```
-
-访问 `http://localhost:5173`，点击登录页面的**「本地模式」**按钮直接进入，无需注册。
-
-### 方式二：云端模式（Supabase）
-
-如果需要多设备同步或远程访问，可以使用 Supabase 作为数据库后端。
-
-```bash
-# 1. 克隆并安装
-git clone https://github.com/your-username/AI-References.git
-cd AI-References && npm install
-
-# 2. 配置环境变量
-cp .env.example .env
-```
-
-编辑 `.env` 文件：
-
-```env
-# 使用 Supabase 云端存储
-STORAGE_PROVIDER=supabase
-
-# Supabase 配置
-SUPABASE_URL=your_supabase_url
-SUPABASE_ANON_KEY=your_supabase_anon_key
-SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
-
-# AI 模型 API Key
-ARK_API_KEY=your_api_key_here
-```
-
-```bash
-# 3. 启动
-npm run dev
-```
-
-访问 `http://localhost:5173`，使用邮箱注册/登录账号。
-
----
-
-## 部署模式
-
-AI-References 支持两种**互斥**的数据存储模式，通过环境变量 `STORAGE_PROVIDER` 切换：
-
-| 特性 | 本地模式 (SQLite) | 云端模式 (Supabase) |
-|------|-------------------|---------------------|
-| 环境变量 | `STORAGE_PROVIDER=sqlite` | `STORAGE_PROVIDER=supabase` |
-| 数据库配置 | 零配置，自动创建 | 需要 Supabase 账号和 API Key |
-| 用户认证 | 免登录，点击「本地模式」直接使用 | 邮箱注册/登录 |
-| 数据位置 | 本地 `app.db` 文件 | Supabase 云端 PostgreSQL |
-| 多设备同步 | 不支持 | 支持 |
-| 适用场景 | 个人本地使用、快速体验 | 多设备、团队协作、持久化云存储 |
-
-> 两种模式的数据不互通。切换模式后，之前模式的数据不会自动迁移。
-
-### 环境变量说明
-
-完整的环境变量配置请参考 `.env.example` 文件。核心配置项：
-
-| 变量名 | 说明 | 默认值 |
-|--------|------|--------|
-| `STORAGE_PROVIDER` | 存储模式：`sqlite` 或 `supabase` | `supabase` |
-| `SQLITE_DB_PATH` | SQLite 数据库文件路径 | `app.db` |
-| `ARK_API_KEY` | 火山引擎 DeepSeek API Key | - |
-| `DEFAULT_LLM_PROVIDER` | 默认模型提供商 | `ark` |
-| `WOS_API_KEY` | Web of Science API Key（可选） | - |
-| `SCOPUS_API_KEY` | Scopus API Key（可选） | - |
 
 ---
 
@@ -176,6 +124,60 @@ Agent 能力：
 
 ---
 
+## 进阶配置
+
+### 云端模式（Supabase）
+
+如需多设备同步或远程访问，可切换为 Supabase 云端存储。
+
+编辑 `.env`：
+
+```env
+STORAGE_PROVIDER=supabase
+
+SUPABASE_URL=your_supabase_url
+SUPABASE_ANON_KEY=your_supabase_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
+```
+
+重新启动后访问 `http://localhost:5173`，使用邮箱注册/登录。
+
+### 两种模式对比
+
+| 特性 | 本地模式 (SQLite) | 云端模式 (Supabase) |
+|------|-------------------|---------------------|
+| 数据库配置 | 零配置，自动创建 | 需要 Supabase 账号 |
+| 用户认证 | 免登录，一键进入 | 邮箱注册/登录 |
+| 数据位置 | 本地 `data/app.db` | 云端 PostgreSQL |
+| 多设备同步 | 不支持 | 支持 |
+| 适用场景 | 个人使用、快速体验 | 团队协作、多端同步 |
+
+> 两种模式的数据不互通。切换模式后，之前的数据不会自动迁移。
+
+### 学术数据库配置（可选）
+
+如需使用 AI 自动检索文献，可在 `.env` 中配置学术数据库 API Key：
+
+| 变量名 | 说明 | 获取方式 |
+|--------|------|----------|
+| `WOS_API_KEY` | Web of Science API | [Clarivate Developer Portal](https://developer.clarivate.com/) |
+| `SCOPUS_API_KEY` | Scopus (Elsevier) API | [Elsevier Developer Portal](https://dev.elsevier.com/) |
+| `SCOPUS_INSTTOKEN` | Scopus 机构令牌（可选） | 由所在机构申请 |
+
+> 不配置学术数据库也可以正常使用项目管理和 AI 对话功能，检索功能会在调用时提示未配置。
+
+### 环境变量速查
+
+| 变量名 | 说明 | 默认值 |
+|--------|------|--------|
+| `STORAGE_PROVIDER` | 存储模式：`sqlite` 或 `supabase` | `sqlite` |
+| `SQLITE_DB_PATH` | SQLite 数据库文件路径 | `app.db` |
+| `DEFAULT_LLM_PROVIDER` | 默认 AI 模型提供商 | `ark` |
+| `PORT` | 后端服务端口 | `8000` |
+| `NODE_ENV` | 运行环境 | `development` |
+
+---
+
 ## 技术栈
 
 | 层级 | 技术 |
@@ -184,8 +186,8 @@ Agent 能力：
 | **UI 组件** | shadcn/ui + Radix UI + Tailwind CSS |
 | **状态管理** | Zustand |
 | **后端服务** | Node.js + Express |
-| **数据库** | SQLite (本地) / Supabase PostgreSQL (云端) |
-| **AI 能力** | DeepSeek / OpenAI / Claude / Gemini 兼容接口 |
+| **数据库** | SQLite/WASM (本地) / Supabase PostgreSQL (云端) |
+| **AI 能力** | DeepSeek / OpenAI / Claude / Gemini 等兼容接口 |
 | **图标** | Lucide Icons |
 
 ---
@@ -205,14 +207,36 @@ AI-References/
 │   ├── src/
 │   │   ├── config/         # 配置文件
 │   │   ├── controllers/    # 控制器层
-│   │   ├── services/       # 业务逻辑层
+│   │   ├── services/       # 业务逻辑层（含 DeepReference 引擎）
 │   │   ├── routes/         # 路由定义
 │   │   ├── middleware/     # 中间件
 │   │   ├── lib/            # 核心库（repository、sqlite、supabase）
-│   │   └── leaves/         # 叶子工具（按阶段分组）
-├── prompts/                # AI Prompt 模板管理
-└── data/                   # 本地数据存储目录
+│   │   ├── prompts/        # AI Prompt 模板管理
+│   │   └── leaves/         # 工作流工具函数（按阶段分组）
+├── scripts/                # 工具脚本
+├── .nvmrc                  # Node.js 版本声明
+└── .env.example            # 环境变量模板
 ```
+
+---
+
+## 常见问题
+
+**Q: `npm install` 报错？**
+
+本项目所有依赖均为纯 JavaScript/WASM，不需要 C++ 编译器或 Python。如果遇到问题：
+1. 确认 Node.js 版本在 18 ~ 22 之间（`node -v`）
+2. 使用 nvm 的用户可以直接 `nvm use` 自动切换
+3. 删除 `node_modules` 和 `package-lock.json` 后重新 `npm install`
+
+**Q: 如何切换 AI 模型？**
+
+- 方式 A：在 `.env` 文件中配置对应模型的 API Key
+- 方式 B：启动后在「设置 > 模型配置」页面添加/管理模型端点
+
+**Q: 数据存储在哪里？**
+
+本地模式下，数据存储在项目 `data/app.db` 文件中。可通过 `SQLITE_DB_PATH` 环境变量修改路径。
 
 ---
 

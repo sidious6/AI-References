@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { AsyncLocalStorage } from 'async_hooks';
 import { config } from '../config/index.js';
 import { getSupabaseClient } from './supabase.js';
-import { getSqliteDb } from './sqlite.js';
+import { getSqliteDb, type CompatDatabase } from './sqlite.js';
 import type {
   User, CreateUser, UpdateUser,
   Project, CreateProject, UpdateProject,

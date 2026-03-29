@@ -209,6 +209,7 @@ export const agentController = {
   },
 
   // 发送消息（流式）
+  // 当前端断开连接时（如页面切换），工作流继续在后台执行
   async chatStream(req: AuthenticatedRequest, res: Response) {
     try {
       const userId = req.userId;
@@ -237,7 +238,13 @@ export const agentController = {
       res.setHeader('Connection', 'keep-alive');
       res.setHeader('X-Accel-Buffering', 'no');
       
-      // 流式响应
+      // 追踪连接状态
+      let clientDisconnected = false;
+      req.on('close', () => {
+        clientDisconnected = true;
+      });
+      
+      // 流式响应：连接断开后静默消费生成器，让工作流继续执行
       for await (const chunk of agentService.chatStream({
         sessionId: id,
         content,
@@ -247,26 +254,34 @@ export const agentController = {
         maxTokens: max_tokens,
         userId,
       })) {
-        if (chunk.type === 'chunk' || chunk.type === 'done') {
-          res.write(`data: ${JSON.stringify({ type: chunk.type, content: chunk.content })}\n\n`);
-        } else if (chunk.type === 'status') {
-          res.write(`data: ${JSON.stringify({ type: 'status', content: chunk.content })}\n\n`);
+        if (clientDisconnected) continue;
+        try {
+          if (chunk.type === 'chunk' || chunk.type === 'done') {
+            res.write(`data: ${JSON.stringify({ type: chunk.type, content: chunk.content })}\n\n`);
+          } else if (chunk.type === 'status') {
+            res.write(`data: ${JSON.stringify({ type: 'status', content: chunk.content })}\n\n`);
+          }
+        } catch {
+          clientDisconnected = true;
         }
       }
       
-      res.write('data: [DONE]\n\n');
-      res.end();
+      if (!clientDisconnected) {
+        res.write('data: [DONE]\n\n');
+        res.end();
+      }
     } catch (error) {
       console.error('Chat stream error:', error);
-      // 如果还没开始流式响应，返回 JSON 错误
       if (!res.headersSent) {
         res.status(500).json({
           success: false,
           error: error instanceof Error ? error.message : 'Failed to process chat stream',
         });
-      } else {
-        res.write(`data: ${JSON.stringify({ type: 'error', error: error instanceof Error ? error.message : 'Stream error' })}\n\n`);
-        res.end();
+      } else if (!res.writableEnded) {
+        try {
+          res.write(`data: ${JSON.stringify({ type: 'error', error: error instanceof Error ? error.message : 'Stream error' })}\n\n`);
+          res.end();
+        } catch { /* connection already closed */ }
       }
     }
   },
@@ -491,6 +506,7 @@ export const agentController = {
   },
   
   // 恢复工作流执行
+  // 当前端断开连接时，工作流继续在后台执行
   async resumeWorkflow(req: AuthenticatedRequest, res: Response) {
     try {
       const userId = req.userId;
@@ -512,23 +528,36 @@ export const agentController = {
       res.setHeader('Connection', 'keep-alive');
       res.setHeader('X-Accel-Buffering', 'no');
       
-      // 流式响应
+      // 追踪连接状态
+      let clientDisconnected = false;
+      req.on('close', () => {
+        clientDisconnected = true;
+      });
+      
+      // 流式响应：连接断开后静默消费生成器，让工作流继续执行
       for await (const chunk of agentService.resumeWorkflow({
         sessionId: id,
-        content: '', // 恢复模式不需要新内容
+        content: '',
         provider: provider as any,
         model,
         userId,
       })) {
-        if (chunk.type === 'chunk' || chunk.type === 'done') {
-          res.write(`data: ${JSON.stringify({ type: chunk.type, content: chunk.content })}\n\n`);
-        } else if (chunk.type === 'status') {
-          res.write(`data: ${JSON.stringify({ type: 'status', content: chunk.content })}\n\n`);
+        if (clientDisconnected) continue;
+        try {
+          if (chunk.type === 'chunk' || chunk.type === 'done') {
+            res.write(`data: ${JSON.stringify({ type: chunk.type, content: chunk.content })}\n\n`);
+          } else if (chunk.type === 'status') {
+            res.write(`data: ${JSON.stringify({ type: 'status', content: chunk.content })}\n\n`);
+          }
+        } catch {
+          clientDisconnected = true;
         }
       }
       
-      res.write('data: [DONE]\n\n');
-      res.end();
+      if (!clientDisconnected) {
+        res.write('data: [DONE]\n\n');
+        res.end();
+      }
     } catch (error) {
       console.error('Resume workflow error:', error);
       if (!res.headersSent) {
@@ -536,9 +565,11 @@ export const agentController = {
           success: false,
           error: error instanceof Error ? error.message : 'Failed to resume workflow',
         });
-      } else {
-        res.write(`data: ${JSON.stringify({ type: 'error', error: error instanceof Error ? error.message : 'Resume error' })}\n\n`);
-        res.end();
+      } else if (!res.writableEnded) {
+        try {
+          res.write(`data: ${JSON.stringify({ type: 'error', error: error instanceof Error ? error.message : 'Resume error' })}\n\n`);
+          res.end();
+        } catch { /* connection already closed */ }
       }
     }
   },

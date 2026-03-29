@@ -142,6 +142,9 @@ class WorkflowExecution {
       this.workflowState.stages = [];
     }
 
+    // root 节点不参与前端阶段进度展示
+    if ('nodeId' in ev && ev.nodeId === 'root') return;
+
     if (ev.type === 'node_started') {
       if (ev.stage) {
         const existingStage = this.workflowState.stages.find(s => s.stage === ev.stage);

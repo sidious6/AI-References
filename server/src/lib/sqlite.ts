@@ -1,9 +1,38 @@
+/**
+ * SQLite 数据库封装（基于 sql.js / WASM）
+ * 提供与 better-sqlite3 兼容的 prepare/exec 接口，零原生依赖
+ */
 import fs from 'fs';
 import path from 'path';
-import Database from 'better-sqlite3';
+import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
 import { config } from '../config/index.js';
 
-let sqliteDb: Database.Database | null = null;
+// 持久化防抖：避免高频写操作时频繁刷盘
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+const SAVE_DEBOUNCE_MS = 200;
+
+// better-sqlite3 兼容的 prepare().run() 返回值
+interface RunResult {
+  changes: number;
+}
+
+// better-sqlite3 兼容的 Statement 接口
+interface CompatStatement {
+  all(...params: unknown[]): Record<string, unknown>[];
+  get(...params: unknown[]): Record<string, unknown> | undefined;
+  run(...params: unknown[]): RunResult;
+}
+
+// 对外暴露的数据库接口，兼容 repository.ts 的调用方式
+export interface CompatDatabase {
+  prepare(sql: string): CompatStatement;
+  exec(sql: string): void;
+  close(): void;
+}
+
+let sqliteDb: CompatDatabase | null = null;
+let rawDb: SqlJsDatabase | null = null;
+let dbFilePath: string = '';
 
 function resolveSqlitePath(): string {
   const configured = config.database.sqlitePath || './data/app.db';
@@ -17,7 +46,89 @@ function ensureParentDir(filePath: string): void {
   }
 }
 
-function initSchema(db: Database.Database): void {
+// 将数据库内容持久化到文件（防抖）
+function scheduleSave(): void {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    if (rawDb && dbFilePath) {
+      try {
+        const data = rawDb.export();
+        const buffer = Buffer.from(data);
+        ensureParentDir(dbFilePath);
+        const tmpPath = dbFilePath + '.tmp.' + Date.now();
+        fs.writeFileSync(tmpPath, buffer);
+        fs.renameSync(tmpPath, dbFilePath);
+      } catch (err) {
+        console.warn('[SQLite] 持久化失败:', err);
+      }
+    }
+  }, SAVE_DEBOUNCE_MS);
+}
+
+// 立即持久化（用于关键写操作后的同步保存）
+function saveNow(): void {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  if (rawDb && dbFilePath) {
+    try {
+      const data = rawDb.export();
+      const buffer = Buffer.from(data);
+      ensureParentDir(dbFilePath);
+      const tmpPath = dbFilePath + '.tmp.' + Date.now();
+      fs.writeFileSync(tmpPath, buffer);
+      fs.renameSync(tmpPath, dbFilePath);
+    } catch (err) {
+      console.warn('[SQLite] 持久化失败:', err);
+    }
+  }
+}
+
+// 将 sql.js 的结果行转为普通对象
+function stmtToObjects(db: SqlJsDatabase, sql: string, params: unknown[]): Record<string, unknown>[] {
+  const stmt = db.prepare(sql);
+  stmt.bind(params as any[]);
+  const rows: Record<string, unknown>[] = [];
+  while (stmt.step()) {
+    rows.push(stmt.getAsObject() as Record<string, unknown>);
+  }
+  stmt.free();
+  return rows;
+}
+
+// 创建 better-sqlite3 兼容的数据库包装
+function createCompatDb(db: SqlJsDatabase): CompatDatabase {
+  return {
+    prepare(sql: string): CompatStatement {
+      return {
+        all(...params: unknown[]): Record<string, unknown>[] {
+          return stmtToObjects(db, sql, params);
+        },
+        get(...params: unknown[]): Record<string, unknown> | undefined {
+          const rows = stmtToObjects(db, sql, params);
+          return rows[0];
+        },
+        run(...params: unknown[]): RunResult {
+          db.run(sql, params as any[]);
+          const changes = db.getRowsModified();
+          scheduleSave();
+          return { changes };
+        },
+      };
+    },
+    exec(sql: string): void {
+      db.exec(sql);
+      scheduleSave();
+    },
+    close(): void {
+      saveNow();
+      db.close();
+    },
+  };
+}
+
+function initSchema(db: CompatDatabase): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
@@ -168,19 +279,67 @@ function initSchema(db: Database.Database): void {
   `);
 }
 
-export function getSqliteDb(): Database.Database {
+// sql.js 需要异步初始化，使用 Promise 缓存确保只初始化一次
+let initPromise: Promise<CompatDatabase> | null = null;
+
+async function initSqliteDb(): Promise<CompatDatabase> {
+  const SQL = await initSqlJs();
+  dbFilePath = resolveSqlitePath();
+  ensureParentDir(dbFilePath);
+
+  let db: SqlJsDatabase;
+  if (fs.existsSync(dbFilePath)) {
+    const fileBuffer = fs.readFileSync(dbFilePath);
+    db = new SQL.Database(fileBuffer);
+  } else {
+    db = new SQL.Database();
+  }
+
+  rawDb = db;
+  const compatDb = createCompatDb(db);
+  initSchema(compatDb);
+  // 建表后立即持久化，确保文件存在
+  saveNow();
+  return compatDb;
+}
+
+export function getSqliteDb(): CompatDatabase {
   if (sqliteDb) return sqliteDb;
 
-  const dbPath = resolveSqlitePath();
-  ensureParentDir(dbPath);
+  // 同步返回：首次调用通过 initSqlJs 的同步路径
+  // sql.js 在 Node 环境下 initSqlJs() 实际可同步解析（WASM 从本地加载）
+  // 但为安全起见使用 ensureInitialized 预热机制
+  if (!initPromise) {
+    initPromise = initSqliteDb().then((db) => {
+      sqliteDb = db;
+      return db;
+    });
+    // 阻塞式等待（仅首次，后续直接返回缓存）
+    // 使用 deasync 模式的替代：抛出提示让调用方先调用 ensureInitialized
+    throw new Error(
+      'SQLite 尚未初始化完成，请先在应用启动时调用 await ensureInitialized()'
+    );
+  }
 
-  sqliteDb = new Database(dbPath);
-  sqliteDb.pragma('journal_mode = WAL');
-  sqliteDb.pragma('foreign_keys = OFF');
-
-  initSchema(sqliteDb);
+  if (!sqliteDb) {
+    throw new Error(
+      'SQLite 尚未初始化完成，请先在应用启动时调用 await ensureInitialized()'
+    );
+  }
 
   return sqliteDb;
+}
+
+// 应用启动时调用，确保 sql.js WASM 已加载完毕
+export async function ensureInitialized(): Promise<void> {
+  if (sqliteDb) return;
+  if (!initPromise) {
+    initPromise = initSqliteDb().then((db) => {
+      sqliteDb = db;
+      return db;
+    });
+  }
+  await initPromise;
 }
 
 export function getSqliteHealth(): { connected: boolean; path: string } {
@@ -192,3 +351,8 @@ export function getSqliteHealth(): { connected: boolean; path: string } {
     return { connected: false, path: resolveSqlitePath() };
   }
 }
+
+// 进程退出时确保数据写入磁盘
+process.on('exit', () => saveNow());
+process.on('SIGINT', () => { saveNow(); process.exit(0); });
+process.on('SIGTERM', () => { saveNow(); process.exit(0); });
